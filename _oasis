@@ -1,4 +1,4 @@
-OASISFormat:      0.3
+OASISFormat:      0.4
 OCamlVersion:     >= 4.00.1
 FindlibVersion:   >= 1.3.2
 Name:             cal
@@ -11,9 +11,9 @@ Maintainers:      Pavel Zaichenkov <zaichenkov@gmail.com>
 License:          MIT
 LicenseFile:      LICENSE.txt
 Homepage:         https://github.com/zayac/cal-solver
-Plugins:          StdFiles (0.3), DevFiles (0.3)
-XStdFilesAUTHORS: false
-XStdFilesREADME:  false
+Plugins:          StdFiles (0.4), DevFiles (0.4)
+XStdFilesAUTHORS: true
+XStdFilesREADME:  true
 BuildTools:       ocamlbuild, camlp4o
 Description:
   Constraint Aggregation Layer for AstraKahn language provides a constraint
@@ -21,12 +21,20 @@ Description:
 
 Executable cal
   Path:           src
-  BuildTools:     ocamlbuild
+  BuildTools:     ocamlbuild, menhir
   MainIs:         main.ml
-  BuildDepends:   core
+  BuildDepends:   ocamlgraph, core
 
-XDevFilesEnableMakefile: true
-XDevFilesEnableConfigure: true
+Document "cal-api"
+  Title:              API reference for CAL
+  InstallDir:         $htmldir/cal
+  Type:               ocamlbuild (0.4)
+  BuildTools:         ocamlbuild, ocamldoc
+  XOCamlbuildPath:    src
+  XOCamlbuildModules: Term, Constr, Network, Solver
+
+XDevFilesEnableMakefile: false
+XDevFilesEnableConfigure: false
 
 SourceRepository trunk
   Type:         git

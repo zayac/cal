@@ -1,70 +1,52 @@
 open Core.Std
 
-type term =
-  | Nil
-  | Int of int
-  | Symbol of string
-  | Tuple of term list
-  | List of term list * string option
-  | Record of (term * term) String.Map.t * string option
-  | Choice of (term * term) String.Map.t * string option
-  | Var of string
-with sexp, compare
+module T = struct
+  type t =
+    | Nil
+    | Int of int
+    | Symbol of string
+    | Tuple of t list
+    | List of t list * string option
+    | Record of (t * t) String.Map.t * string option
+    | Choice of (t * t) String.Map.t * string option
+    | Var of string
+  with sexp, compare
+end
+include T
+include Comparable.Make(T)
 
-(** This exception must be raised every time when non-ground term is 
-    provided as an argument for a function that expects a ground term. *)
-exception Non_Ground of term with sexp
+exception Non_Ground of t with sexp
 
-(** The exception is raised when the seniority relation is being resolved
-    for two incomparable terms. *)
-exception Incomparable_Terms of term * term with sexp
+exception Incomparable_Terms of t * t with sexp
 
-module Term : sig
-  type t = term
-  include Comparable.S with type t := t
-  val to_string     : t -> string
-  val of_string     : string -> t
-  val is_nil_exn    : t -> bool
-  val is_nil        : t -> bool option
-  val canonize      : t -> t
-  val is_ground     : t -> bool
-  val seniority_exn : t -> t -> int
-  val vars          : t -> String.Set.t
-end = struct
-  module T = struct
-    type t = term with sexp, compare
-  end
-  include T
-  include Comparable.Poly(T)
+let hash = Hashtbl.hash
 
-  let rec to_string t =
-    let module L = List in
-    let module S = String in
-    let module SM = String.Map in
-    let tail_to_string = function
-    | None -> ""
-    | Some v -> " | $" ^ v in
-    let dict_el_to_string (l, (g, t)) =
-      Printf.sprintf "%s(%s): %s" l (to_string g) (to_string t) in
-    let print_dict x tail lsep rsep =
-      let element_strs = L.map ~f:dict_el_to_string (SM.to_alist x) in
-      S.concat [lsep;
-        S.concat ~sep:", " element_strs; tail_to_string tail; rsep] in
-    match t with
-    | Nil -> "nil"
-    | Int x -> string_of_int x
-    | Symbol x -> x
-    | Tuple x -> S.concat ["("; S.concat ~sep:", " (L.map ~f:to_string x); ")"]
-    | List (x, tail) ->
-      S.concat ["["; S.concat ~sep:", " (L.map ~f:to_string x); 
-        tail_to_string tail; "]"]
-    | Record (x, tail) -> print_dict x tail "{" "}"
-    | Choice (x, tail) -> print_dict x tail "(:" ":)"
-    | Var x -> "$" ^ x
+let rec to_string t =
+  let module L = List in
+  let module S = String in
+  let module SM = String.Map in
+  let tail_to_string = function
+  | None -> ""
+  | Some v -> " | $" ^ v in
+  let dict_el_to_string (l, (g, t)) =
+    Printf.sprintf "%s(%s): %s" l (to_string g) (to_string t) in
+  let print_dict x tail lsep rsep =
+    let element_strs = L.map ~f:dict_el_to_string (SM.to_alist x) in
+    S.concat [lsep;
+      S.concat ~sep:", " element_strs; tail_to_string tail; rsep] in
+  match t with
+  | Nil -> "nil"
+  | Int x -> string_of_int x
+  | Symbol x -> x
+  | Tuple x -> S.concat ["("; S.concat ~sep:", " (L.map ~f:to_string x); ")"]
+  | List (x, tail) ->
+    S.concat ["["; S.concat ~sep:", " (L.map ~f:to_string x); 
+      tail_to_string tail; "]"]
+  | Record (x, tail) -> print_dict x tail "{" "}"
+  | Choice (x, tail) -> print_dict x tail "(:" ":)"
+  | Var x -> "$" ^ x
 
-  let of_string s = Nil
-  
-  let rec is_nil = function
+let rec is_nil = function
   | Nil -> Some true
   | List (x, None) ->
     let nil_list = List.map ~f:is_nil x in
@@ -103,22 +85,22 @@ end = struct
       | Int _ | Symbol _ | Tuple _ | Choice (_, _)  -> false
     with Non_Ground _ -> raise (Non_Ground t)
 
-  let rec canonize t =
-    let rec trim_list_rev = function
-    | [] -> []
-    | hd :: tl as el ->
-      match is_nil hd with
-      | Some true -> trim_list_rev tl
-      | Some false | None -> el in
-    match t with
-    | List (x, None) -> List (List.rev (trim_list_rev (List.rev x)), None)
-    | x -> x
+let rec canonize t =
+  let rec trim_list_rev = function
+  | [] -> []
+  | hd :: tl as el ->
+    match is_nil hd with
+    | Some true -> trim_list_rev tl
+    | Some false | None -> el in
+  match t with
+  | List (x, None) -> List (List.rev (trim_list_rev (List.rev x)), None)
+  | x -> x
 
-  let rec is_ground = function
+let rec is_ground = function
   | Nil | Int _ | Symbol _ -> true
   | List (x, None)
   | Tuple x -> List.for_all ~f:is_ground x
-  | Record (x, None)
+  |  Record (x, None)
   | Choice (x, None) ->
     String.Map.for_all ~f:(fun (g, t) -> is_ground g && is_ground t) x
   | Choice (_, _)
@@ -126,15 +108,16 @@ end = struct
   | List (_, _)
   | Var _ -> false
 
-  let rec seniority_exn t1 t2 =
+let rec seniority_exn t1 t2 =
+  try
     let seniority_lists_exn l l' =
-      let lhead = List.take l (List.length l') in
-      let comp_res = List.map2_exn ~f:seniority_exn lhead l' in
-      if List.exists ~f:(Int.(=) 1) comp_res then
+    let lhead = List.take l (List.length l') in
+    let comp_res = List.map2_exn ~f:seniority_exn lhead l' in
+    if List.exists ~f:(Int.(=) 1) comp_res then
         raise (Incomparable_Terms (t1, t2))
-      else if Int.(List.length l = List.length l')
+    else if Int.(List.length l = List.length l')
         && List.for_all ~f:(Int.(=) 0) comp_res then 0
-      else 1 in
+    else 1 in
     match t1, t2 with
     | t1, t2 when t1 = t2 -> 0
     | Nil, x when is_nil_exn x -> 0
@@ -154,54 +137,55 @@ end = struct
         else 0
     | List (x, None), List (x', None) ->
       if Int.(List.length x > List.length x') then seniority_lists_exn x x'
-      else -1 * (seniority_lists_exn x' x)
+        else -1 * (seniority_lists_exn x' x)
     | Record (x, None), Record (x', None)
     | Choice (x', None), Choice (x, None) -> seniority_maps_exn x x'
     | _ -> raise (Incomparable_Terms (t1, t2))
+  with Incomparable_Terms _
+     | Non_Ground _ ->
+     raise (Incomparable_Terms (t1, t2))
 
-  (* [seniority_mapes exn x x'] resolves the seniority relation for two 'map'
-     terms, where [x] and [x'] has types [(term * term) String.Map] each.
-     Basically, this is a seniority relation resolution for record and choice
-     terms. *)
-  and seniority_maps_exn x x' =
-    let module SM = String.Map in
-    let error_s = "wrong seniority relation" in
-    let comp_res = ref [] in
-    let validate map ~key ~data:(guard, term) =
-      let guard', term' = SM.find_exn map key in
-      seniority_exn guard' guard in
-    let _ = if Int.(SM.length x > SM.length x') then
-      SM.iter ~f:(fun ~key ~data -> 
-          comp_res := (validate x ~key ~data) :: !comp_res
-        ) x'
-    else
-      SM.iter ~f:(fun ~key ~data -> 
-          comp_res := (validate x' ~key ~data) :: !comp_res
-        ) x in
-    let less = List.exists ~f:(Int.(=) (-1)) !comp_res in
-    let more = List.exists ~f:(Int.(=) 1) !comp_res in
-    if less && more then invalid_arg error_s
-    else if less then -1
-    else if more then 1
-    else 0
+(* [seniority_mapes exn x x'] resolves the seniority relation for two 'map'
+    terms, where [x] and [x'] has types [(term * term) String.Map] each.
+    Basically, this is a seniority relation resolution for record and choice
+    terms. *)
+and seniority_maps_exn x x' =
+  let module SM = String.Map in
+  let error_s = "wrong seniority relation" in
+  let comp_res = ref [] in
+  let validate map ~key ~data:(guard, term) =
+    let guard', term' = SM.find_exn map key in
+    seniority_exn guard' guard in
+  let _ = if Int.(SM.length x > SM.length x') then
+    SM.iter ~f:(fun ~key ~data -> 
+      comp_res := (validate x ~key ~data) :: !comp_res
+    ) x'
+  else
+    SM.iter ~f:(fun ~key ~data -> 
+      comp_res := (validate x' ~key ~data) :: !comp_res
+    ) x in
+  let less = List.exists ~f:(Int.(=) (-1)) !comp_res in
+  let more = List.exists ~f:(Int.(=) 1) !comp_res in
+  if less && more then invalid_arg error_s
+  else if less then -1
+  else if more then 1
+  else 0
 
-  let rec vars t =
-    let module SS = String.Set in
-    let module SM = String.Map in
-    let module L = List in
-    match t with
-    | Var v -> String.Set.singleton v
-    | Nil | Int _ | Symbol _ -> SS.empty
-    | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x)
-    | List (x, tail) ->
-      let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
-      SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x))
-    | Record (map, v)
-    | Choice (map, v) ->
-      let f ~key:_ ~data:(g, t) acc =
-        SS.union acc (SS.union (vars g) (vars t)) in
-      let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
-      SS.union tl (SM.fold ~init:SS.empty ~f:f map)
-
-end
+let rec vars t =
+  let module SS = String.Set in
+  let module SM = String.Map in
+  let module L = List in
+  match t with
+  | Var v -> String.Set.singleton v
+  | Nil | Int _ | Symbol _ -> SS.empty
+  | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x)
+  | List (x, tail) ->
+    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
+    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x))
+  | Record (map, v)
+  | Choice (map, v) ->
+    let f ~key:_ ~data:(g, t) acc =
+    SS.union acc (SS.union (vars g) (vars t)) in
+    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
+    SS.union tl (SM.fold ~init:SS.empty ~f:f map)
 

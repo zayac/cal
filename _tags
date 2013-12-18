@@ -1,7 +1,7 @@
 # OASIS_START
-# DO NOT EDIT (digest: 5777e06563040d0dae4898c69af84601)
-# Ignore VCS directories, you can use the same kind of rule outside 
-# OASIS_START/STOP if you want to exclude directories that contains 
+# DO NOT EDIT (digest: d59f2bac0447c1ec426f0930b9e47e7f)
+# Ignore VCS directories, you can use the same kind of rule outside
+# OASIS_START/STOP if you want to exclude directories that contains
 # useless stuff for the build process
 <**/.svn>: -traverse
 <**/.svn>: not_hygienic
@@ -14,8 +14,9 @@
 "_darcs": -traverse
 "_darcs": not_hygienic
 # Executable cal
-"src/main.byte": pkg_core
-<src/*.ml{,i}>: pkg_core
+"src/main.byte": package(ocamlgraph)
+"src/main.byte": package(core)
+<src/*.ml{,i}>: package(ocamlgraph)
+<src/*.ml{,i}>: package(core)
 # OASIS_STOP
-<src/*.ml>: syntax_camlp4o, pkg_sexplib.syntax, pkg_core.syntax, pkg_comparelib.syntax
-true: thread,debug,menhir
+true: pkg_core, pkg_ocamlgraph, thread, debug, use_menhir, syntax_camlp4o, pkg_sexplib.syntax, pkg_core.syntax, pkg_comparelib.syntax

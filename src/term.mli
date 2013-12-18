@@ -1,50 +1,58 @@
 open Core.Std
 
 (** A generic non-ground term in AKTA *)
-type term =
+type t =
   | Nil
   | Int of int
   | Symbol of string
-  | Tuple of term list
-  | List of term list * string option
-  | Record of (term * term) String.Map.t * string option
-  | Choice of (term * term) String.Map.t * string option
+  | Tuple of t list
+  | List of t list * string option
+  | Record of (t * t) String.Map.t * string option
+  | Choice of (t * t) String.Map.t * string option
   | Var of string
 
-(** Functions over terms *)
-module Term : sig
-  type t = term
+val compare_t : t -> t -> int
+val t_of_sexp : Sexplib.Sexp.t -> t
+val sexp_of_t : t -> Sexplib.Sexp.t
 
-  (** Lexicographical term comparison *)
-  include Comparable.S with type t := t
+(** This exception must be raised every time when non-ground term is 
+    provided as an argument for a function that expects a ground term. *)
+exception Non_Ground of t with sexp
 
-  (** Convert term to syntaxical representation *)
-  val to_string : t -> string
-  (** Parse term expression from string *)
-  val of_string : string -> t
+(** The exception is raised when the seniority relation is being resolved
+    for two incomparable terms. *)
+exception Incomparable_Terms of t * t with sexp
 
-  (** [is_nil t] returns [true] only if a term [t] is ground and equals to
-      [Nil] in the canonical form.
-      Otherwise, it returns [false] for ground term.
-      If [t] is not ground, then it throws an exception *)
-  val is_nil_exn : t -> bool
-  (** [is_nil t] does the same that [is_nil_exn t] does, but without throwing
-      an exception. It returns [None] instead. *)
-  val is_nil : t -> bool option
+(** Lexicographical term comparison *)
+include Comparable.S with type t := t
 
-  (** [is_ground t] returns [true] only if term [t] does not contain term of
-      the form [Var s] as children. *)
-  val is_ground : t -> bool
+(** A hash function for a term *)
+val hash : t -> int
 
-  (** Provided a term [t], [canonize t] reduces it to the canonical
-      form. Terms with variables [Var s] are not reduced. *)
-  val canonize : t -> t
+(** Convert term to syntaxical representation *)
+val to_string : t -> string
 
-  (** [seniority t t'] compares two ground terms using the seniority relation.
-      Throws an exception if one of the terms is not ground. *)
-  val seniority_exn : t -> t -> int
+(** [is_nil t] returns [true] only if a term [t] is ground and equals to
+    [Nil] in the canonical form.
+    Otherwise, it returns [false] for ground term.
+    If [t] is not ground, then it throws an exception *)
+val is_nil_exn : t -> bool
+(** [is_nil t] does the same that [is_nil_exn t] does, but without throwing
+    an exception. It returns [None] instead. *)
+val is_nil : t -> bool option
 
-  (** [vars t] returns a set of all variable strings [s] from terms of the
-      form [Var s] that are contained in [t]. *)
-  val vars : t -> String.Set.t
-end
+(** [is_ground t] returns [true] only if term [t] does not contain term of
+    the form [Var s] as children. *)
+val is_ground : t -> bool
+
+(** Provided a term [t], [canonize t] reduces it to the canonical
+    form. Terms with variables [Var s] are not reduced. *)
+val canonize : t -> t
+
+(** [seniority t t'] compares two ground terms using the seniority relation.
+    Throws an exception if one of the terms is not ground. *)
+val seniority_exn : t -> t -> int
+
+(** [vars t] returns a set of all variable strings [s] from terms of the
+    form [Var s] that are contained in [t]. *)
+val vars : t -> String.Set.t
