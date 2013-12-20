@@ -1,0 +1,4 @@
+[3] <= $x <= nil
+$x is a list
+nil <= $y <= nil
+$y is a list

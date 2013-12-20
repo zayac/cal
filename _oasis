@@ -33,8 +33,14 @@ Document "cal-api"
   XOCamlbuildPath:    src
   XOCamlbuildModules: Term, Constr, Network, Solver
 
-XDevFilesEnableMakefile: false
-XDevFilesEnableConfigure: false
+Test main
+  TestTools:      perl
+  Command:        ./scripts/run_all_tests.pl main.byte my myerr; ./scripts/compare_results.pl ref my referr myerr
+
+PostCleanCommand: tests/*.my tests/*.myerr solver.log
+
+XDevFilesEnableMakefile: true
+XDevFilesEnableConfigure: true
 
 SourceRepository trunk
   Type:         git

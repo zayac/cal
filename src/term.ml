@@ -51,7 +51,7 @@ let rec is_nil = function
   | List (x, None) ->
     let nil_list = List.map ~f:is_nil x in
     if List.exists ~f:is_none nil_list then None
-    else if List.exists ~f:(Option.value ~default:false) nil_list then
+    else if List.exists ~f:(Poly.(=) (Some false)) nil_list then
       Some false
     else Some true
   | Record (x, None) ->

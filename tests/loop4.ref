@@ -1,0 +1,6 @@
+[1, 1] <= $a <= [1]
+$a is a list
+[1, 1] <= $b <= [1, 1]
+$b is a list
+[1, 1] <= $c <= nil
+$c is a list

@@ -25,7 +25,26 @@ let create_dot_output g dot_output =
   Out_channel.with_file dot_output
     ~f:(fun oc -> Dot.output_graph oc g)
 
+let print_constraints map =
+  let f ~key ~data =
+    let g, t = data.bounds in
+    let print_term = function
+    | None -> "???"
+    | Some t -> Term.to_string t in
+    Printf.printf "%s <= $%s <= %s\n" (print_term g) key (print_term t);
+    match data.collection with
+    | None -> ()
+    | Some (RecordWoLabels x) ->
+      Printf.printf "$%s is a record without labels {%s}\n" key
+      (String.concat ~sep:", " (String.Set.to_list x))
+    | Some (ChoiceWoLabels x) ->
+      Printf.printf "$%s is a choice without labels {%s}\n" key
+      (String.concat ~sep:", " (String.Set.to_list x))
+    | Some ListCol -> Printf.printf "$%s is a list\n" key in
+  String.Map.iter ~f map
+
 let loop dot_output filename =
+  Location.filename := filename;
   try
     LOG "reading and parsing constraints from %s" filename LEVEL INFO;
     let constrs = In_channel.with_file filename
@@ -35,7 +54,8 @@ let loop dot_output filename =
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
     LOG "unifying constraints represented as the graph" LEVEL INFO;
-    let _ = unify_exn g in
+    let bounds = unify_exn g in
+    let _ = print_constraints bounds in
     ()
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg

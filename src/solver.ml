@@ -11,27 +11,11 @@ type var_constr =
     collection : collection_constr option;
   }
 
-let print_constraints map =
-  let f ~key ~data =
-    let g, t = data.bounds in
-    let print_term = function
-    | None -> "???"
-    | Some t -> Term.to_string t in
-    Printf.printf "%s <= $%s <= %s\n" (print_term g) key (print_term t);
-    match data.collection with
-    | None -> ()
-    | Some (RecordWoLabels x) ->
-      Printf.printf "$%s is a record without labels {%s}\n" key
-      (String.concat ~sep:", " (String.Set.to_list x))
-    | Some (ChoiceWoLabels x) ->
-      Printf.printf "$%s is a choice without labels {%s}\n" key
-      (String.concat ~sep:", " (String.Set.to_list x))
-    | Some ListCol -> Printf.printf "$%s is a list\n" key in
-  String.Map.iter ~f map
-
 exception Unsatisfiability_Error of string
 
-let unsat_error msg = raise (Unsatisfiability_Error msg)
+let unsat_error msg =
+  let open Errors in
+  raise (Unsatisfiability_Error (error msg))
 
 let add_list_cstr_exn cstrs key =
   LOG "variable %s must be a list" key LEVEL TRACE;
@@ -127,7 +111,7 @@ let set_collection_constrs_exn constrs =
   let terms = List.fold ~init:[] 
     ~f:(fun acc (left, right) -> acc @ left @ right) constrs in
   resolve_collections_exn String.Map.empty terms
-(*
+
 let get_list_term_exn =
   let open Term in
   function
@@ -148,7 +132,7 @@ let get_choice_term_exn =
   | Choice (x, _) -> x
   | Nil -> String.Map.empty
   | _ -> invalid_arg "record as a term is expected"
-*)
+
 type bound =
   | UpperB
   | LowerB
@@ -179,6 +163,12 @@ let rec bounding_term_exn bound constrs term =
         | Some t -> t
       end
   | Tuple x -> Tuple (List.map ~f:(bounding_term_exn bound constrs) x)
+  | List (x, tail) ->
+    let tl = match tail with
+    | None -> []
+    | Some var ->
+      get_list_term_exn (bounding_term_exn bound constrs (Var var)) in
+    List ((List.map ~f:(bounding_term_exn bound constrs) x) @ tl, None)
 
 let verify_collection var col term f =
   let open Term in
@@ -190,40 +180,55 @@ let verify_collection var col term f =
   | Some ListCol, List _ -> f
   | _ -> unsat_error ("constraint violation for variable $" ^ var)
 
-let set_bound_exn bound constrs var term =
+let set_bound_exn depth bound constrs var term =
   let term = Term.canonize term in
   let term = if Term.is_nil_exn term then Term.Nil else term in
+  let constrs =
+    let open Term in
+    match term with
+    | List _ -> add_list_cstr_exn constrs var
+    | Record _ -> add_record_cstr_exn constrs var String.Set.empty
+    | Choice _ -> add_choice_cstr_exn constrs var String.Set.empty
+    | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs in
+  let b = if bound = UpperB then "lowest upper bound"
+    else "greatest upper bound" in
   String.Map.change constrs var (fun v -> match bound, v, term with
     (* no constraints yet *)
     | LowerB, None, t ->
-            Some { bounds = (Some t, Some Term.Nil); collection = None }
+      LOG "setting %s for variable $%s to %s" b var (Term.to_string Term.Nil)
+        LEVEL TRACE;
+      Some { bounds = (Some t, Some Term.Nil); collection = None }
     | UpperB, None, t ->
       Some { bounds = (None, Some t); collection = None }
-    (* the greatest lowest bound for variable is already nil *)
-    | LowerB, ((Some { bounds = (Some Term.Nil, ub); collection = col }) as el),
-        _ ->
-      verify_collection var col term el 
     (* the greatest lowest bound is not set yet *)
     | LowerB, (Some ({ bounds = (None, ub); collection = col } as el)), _ ->
+      LOG "setting %s for variable $%s to %s" b var (Term.to_string term)
+        LEVEL TRACE;
       verify_collection var col term (Some {el with bounds = (Some term, ub)})
     (* the greatest lowest bound exists (try to shrink) *)
     | LowerB, ((Some { bounds = (Some oldt, ub); collection = col}) as el),
         newt ->
       verify_collection var col term
-        (if Term.seniority_exn oldt newt = 1 then
+        (if Term.seniority_exn oldt newt = 1 then begin
+          LOG "setting %s for variable $%s to %s" b var (Term.to_string newt)
+            LEVEL TRACE;
            Some { bounds = (Some newt, ub); collection = col }
-         else el
+           end else el
         )
     (* the least upper bound is not set yet *)
     | UpperB, (Some ({ bounds = (lb, None); collection = col } as el)), _ ->
+      LOG "setting %s for variable $%s to %s" b var (Term.to_string term)
+        LEVEL TRACE;
       verify_collection var col term (Some {el with bounds = (lb, Some term)})
     (* the least upper bound exists (try to shrink) *)
     | UpperB, ((Some { bounds = (lb, Some oldt); collection = col}) as el),
         newt ->
       verify_collection var col term
-        (if Term.seniority_exn newt oldt = 1 then
+        (if Term.seniority_exn newt oldt = 1 then begin
+          LOG "setting %s for variable $%s to %s" b var (Term.to_string newt)
+            LEVEL TRACE;
            Some { bounds = (lb, Some newt); collection = col}
-         else el
+         end else el
         )
   )
 
@@ -241,24 +246,86 @@ let rec solve_senior_exn depth bound constrs left right =
     match left, right with
     | Var t, Var t' ->
       if Poly.(bound = UpperB) then
-        set_bound_exn bound constrs t (bounding_term_exn UpperB constrs right)
+        set_bound_exn depth bound constrs t
+          (bounding_term_exn UpperB constrs right)
       else
-        set_bound_exn bound constrs t' (bounding_term_exn UpperB constrs left)
-    | (Nil | Int _ | Symbol _ | Tuple _), Var t ->
+        set_bound_exn depth bound constrs t'
+          (bounding_term_exn UpperB constrs left)
+    | (Nil | Int _ | Symbol _ | Tuple _ | List _), Var t ->
       if Poly.(bound = UpperB) then
         solve_senior_exn (depth + 1) bound constrs left
           (bounding_term_exn UpperB constrs right)
       else
-        set_bound_exn bound constrs t (bounding_term_exn UpperB constrs left)
-    | Var t, (Nil | Int _ | Symbol _ | Tuple _) ->
+        set_bound_exn depth bound constrs t
+          (bounding_term_exn UpperB constrs left)
+    | Var t, (Nil | Int _ | Symbol _ | Tuple _ | List _) ->
       if Poly.(bound = LowerB) then
         solve_senior_exn (depth + 1) bound constrs
           (bounding_term_exn UpperB constrs left)
           right
       else
-        set_bound_exn bound constrs t (bounding_term_exn UpperB constrs right)
+        set_bound_exn depth
+          bound constrs t (bounding_term_exn UpperB constrs right)
     | Tuple t, Tuple t' when Int.(List.length t = List.length t') ->
       List.fold2_exn ~init:constrs ~f:(solve_senior_exn (depth + 1) bound) t t'
+    | List (t, v), List (t', v') -> begin
+      (* validate the common head of the list and return remaining elements
+         (depending on lists lengths) *)
+      let rec validate_head constrs l1 l2 = match l1, l2 with
+      | [], _ -> constrs, [], l2
+      | _, [] -> constrs, l1, []
+      | hd :: tl, hd' :: tl' ->
+        let cstrs = solve_senior_exn (depth + 1) bound constrs hd hd' in
+        validate_head cstrs tl tl' in
+      let constrs, rem1, rem2 = validate_head constrs t t' in
+      (* an error if the tail of the right term is not nil *)
+      let _ = if Poly.(v = None && rem2 <> [] &&
+        Term.is_nil (List (rem2, None)) <> Some true) then error left right in
+      let rem1, rem2, what, where =
+        if Poly.(bound = LowerB) then rem1, rem2, v, v'
+        else rem2, rem1, v', v in
+      (* set variables in the tail of the list to Nil/[] *)
+      let constrs =
+        if Poly.(what = None) then
+          let set_ground cstrs var =
+            match var with
+            | Var v -> set_bound_exn depth bound cstrs v Nil
+            | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
+              cstrs in
+          List.fold_left ~init:constrs ~f:set_ground rem2
+        else constrs in
+      match where with
+      | None -> constrs
+      | Some var' ->
+        let tail_list = ref [] in
+        let _ = List.iter ~f:(fun el ->
+            tail_list := !tail_list @ [bounding_term_exn UpperB constrs el]
+          ) rem1 in
+        let _ = match what with
+        | None -> ()
+        | Some var -> tail_list := List.append !tail_list
+          (get_list_term_exn (bounding_term_exn UpperB constrs (Var var))) in
+        set_bound_exn depth bound constrs var' (List (!tail_list, None))
+      end
+    | List (l, v), Nil when Poly.(bound = UpperB) ->
+      let verify constrs = function
+      | Var t -> set_bound_exn depth bound constrs t Nil
+      | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _
+      | Choice _ -> constrs in
+      let constrs = match v with
+        | None -> constrs
+        | Some x -> set_bound_exn depth bound constrs x Nil in
+      List.fold_left ~init:constrs ~f:verify l
+    | Nil, List (l, v) when Poly.(bound = LowerB) ->
+      let verify constrs = function
+      | Var t -> set_bound_exn depth bound constrs t Nil
+      | Nil -> constrs
+      | t when Poly.(Term.is_nil t = Some true) -> constrs
+      | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
+        unsat_error (Printf.sprintf "list %s is not nil"
+          (Term.to_string right)
+        ) in
+        List.fold_left ~init:constrs ~f:verify l 
     | t, t' ->
       if Int.(Term.seniority_exn t t' = -1) then error t t'
       else constrs
@@ -285,5 +352,4 @@ let unify_exn g =
   let constrs = set_collection_constrs_exn topo in
   LOG "resolving bound constraints" LEVEL DEBUG; 
   let constrs = resolve_bound_constraints constrs topo in
-  print_constraints constrs;
   constrs
