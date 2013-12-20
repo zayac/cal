@@ -21,15 +21,20 @@ module Dot = Graph.Graphviz.Dot(struct
   end)
 
 let create_dot_output g dot_output =
+  LOG "outputting the network graph in dot format to %s" dot_output LEVEL INFO;
   Out_channel.with_file dot_output
     ~f:(fun oc -> Dot.output_graph oc g)
 
 let loop dot_output filename =
   try
+    LOG "reading and parsing constraints from %s" filename LEVEL INFO;
     let constrs = In_channel.with_file filename
       ~f:(fun inx -> Parser.parse Lexer.read (Lexing.from_channel inx)) in
+    LOG "%d constraints are parsed" (List.length constrs) LEVEL INFO;
+    LOG "constructing a graph from constraints" LEVEL INFO;
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
+    LOG "unifying constraints represented as the graph" LEVEL INFO;
     let _ = unify_exn g in
     ()
   with Lexer.Syntax_Error msg

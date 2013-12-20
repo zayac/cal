@@ -1,9 +1,9 @@
 (* OASIS_START *)
-(* DO NOT EDIT (digest: 2dc0c86dfb2d3b5d01edd1173ffb40e0) *)
+(* DO NOT EDIT (digest: 5b182851407a28133f149e7627fcd014) *)
 This is the INSTALL file for the cal distribution.
 
 This package uses OASIS to generate its build system. See section OASIS for
-full information. 
+full information.
 
 Dependencies
 ============
@@ -11,8 +11,9 @@ Dependencies
 In order to compile this package, you will need:
 * ocaml (>= 4.00.1) for all, doc cal-api
 * findlib (>= 1.3.2)
-* ocamlgraph
 * core
+* ocamlgraph
+* bolt
 * menhir
 
 Installing

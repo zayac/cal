@@ -34,6 +34,7 @@ exception Unsatisfiability_Error of string
 let unsat_error msg = raise (Unsatisfiability_Error msg)
 
 let add_list_cstr_exn cstrs key =
+  LOG "variable %s must be a list" key LEVEL TRACE;
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil); collection = Some ListCol }
     | Some { bounds; collection } ->
@@ -48,6 +49,8 @@ let add_list_cstr_exn cstrs key =
     )
 
 let add_record_cstr_exn cstrs key labels =
+  LOG "variable %s must be a record without labels {%s}" key
+    (String.concat ~sep:", " (String.Set.to_list labels)) LEVEL TRACE;
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil);
       collection = Some (RecordWoLabels labels) }
@@ -65,6 +68,8 @@ let add_record_cstr_exn cstrs key labels =
     )
 
 let add_choice_cstr_exn cstrs key labels =
+  LOG "variable %s must be a choice without labels {%s}" key
+    (String.concat ~sep:", " (String.Set.to_list labels)) LEVEL TRACE;
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil);
       collection = Some (ChoiceWoLabels labels) }
@@ -222,7 +227,10 @@ let set_bound_exn bound constrs var term =
         )
   )
 
-let rec solve_senior_exn bound constrs left right =
+let rec solve_senior_exn depth bound constrs left right =
+  LOG "%sresolving %s for constraint %s" (String.make depth ' ')
+    (if bound = UpperB then "lowest upper bound" else "greatest lower bound")
+    (Constr.to_string ([left], [right])) LEVEL TRACE;
   let error t1 t2 =
     unsat_error
       (Printf.sprintf "the seniority relation %s <= %s does not hold"
@@ -238,18 +246,19 @@ let rec solve_senior_exn bound constrs left right =
         set_bound_exn bound constrs t' (bounding_term_exn UpperB constrs left)
     | (Nil | Int _ | Symbol _ | Tuple _), Var t ->
       if Poly.(bound = UpperB) then
-        solve_senior_exn bound constrs left
+        solve_senior_exn (depth + 1) bound constrs left
           (bounding_term_exn UpperB constrs right)
       else
         set_bound_exn bound constrs t (bounding_term_exn UpperB constrs left)
     | Var t, (Nil | Int _ | Symbol _ | Tuple _) ->
       if Poly.(bound = LowerB) then
-        solve_senior_exn bound constrs (bounding_term_exn UpperB constrs left)
+        solve_senior_exn (depth + 1) bound constrs
+          (bounding_term_exn UpperB constrs left)
           right
       else
         set_bound_exn bound constrs t (bounding_term_exn UpperB constrs right)
     | Tuple t, Tuple t' when Int.(List.length t = List.length t') ->
-      List.fold2_exn ~init:constrs ~f:(solve_senior_exn bound) t t'
+      List.fold2_exn ~init:constrs ~f:(solve_senior_exn (depth + 1) bound) t t'
     | t, t' ->
       if Int.(Term.seniority_exn t t' = -1) then error t t'
       else constrs
@@ -259,17 +268,22 @@ let resolve_bound_constraints (constrs : var_constr String.Map.t) topo =
   let cstrs = ref constrs in
   let apply bound (left, right) =
     List.iter ~f:(fun t -> List.iter
-        ~f:(fun t' -> cstrs := solve_senior_exn bound !cstrs t t')
+        ~f:(fun t' -> cstrs := solve_senior_exn 0 bound !cstrs t t')
         right
       ) left in
+  LOG "setting upper bounds for constraints" LEVEL TRACE;
   List.iter ~f:(apply UpperB) (List.rev topo);
+  LOG "setting lower bounds for constraints" LEVEL TRACE;
   List.iter ~f:(apply LowerB) topo;
   !cstrs
 
 let unify_exn g =
   (*let acyclic_g, loops = Network.to_acyclic g in*)
+  LOG "creating a traversal order for constraints" LEVEL DEBUG;
   let topo = Network.traversal_order g in
+  LOG "setting constraints on the type of constraint" LEVEL DEBUG;
   let constrs = set_collection_constrs_exn topo in
+  LOG "resolving bound constraints" LEVEL DEBUG; 
   let constrs = resolve_bound_constraints constrs topo in
   print_constraints constrs;
   constrs
