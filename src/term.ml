@@ -29,7 +29,9 @@ let rec to_string t =
   | None -> ""
   | Some v -> " | $" ^ v in
   let dict_el_to_string (l, (g, t)) =
-    Printf.sprintf "%s(%s): %s" l (to_string g) (to_string t) in
+    let guard = if g = Tuple [Symbol "not"; Nil] then "" else
+      Printf.sprintf "(%s)" (to_string g) in
+    Printf.sprintf "%s%s: %s" l guard (to_string t) in
   let print_dict x tail lsep rsep =
     let element_strs = L.map ~f:dict_el_to_string (SM.to_alist x) in
     S.concat [lsep;
@@ -61,7 +63,7 @@ let rec is_nil = function
       | Some false -> is_nil t in
     let nil_list = (List.map ~f:is_element_nil (String.Map.data x)) in
     if List.exists ~f:is_none nil_list then None
-    else if List.exists ~f:(Option.value ~default:false) nil_list then
+    else if List.exists ~f:(Poly.(=) (Some false)) nil_list then
       Some false
     else Some true
   | Var _
@@ -85,7 +87,7 @@ let rec is_nil = function
       | Int _ | Symbol _ | Tuple _ | Choice (_, _)  -> false
     with Non_Ground _ -> raise (Non_Ground t)
 
-let rec canonize t =
+let canonize t =
   let rec trim_list_rev = function
   | [] -> []
   | hd :: tl as el ->
@@ -115,7 +117,7 @@ let rec seniority_exn t1 t2 =
     let comp_res = List.map2_exn ~f:seniority_exn lhead l' in
     if List.exists ~f:(Int.(=) 1) comp_res then
         raise (Incomparable_Terms (t1, t2))
-    else if Int.(List.length l = List.length l')
+    else if Int.equal (List.length l) (List.length l')
         && List.for_all ~f:(Int.(=) 0) comp_res then 0
     else 1 in
     match t1, t2 with
@@ -125,7 +127,7 @@ let rec seniority_exn t1 t2 =
     | _, Nil -> 1
     | Nil, _ -> -1
     | Tuple x, Tuple x' ->
-      if Int.(List.length x <> List.length x') then
+      if not (Int.equal (List.length x) (List.length x')) then
         raise (Incomparable_Terms (t1, t2))
       else
         let comp_res = List.map2_exn ~f:seniority_exn x x' in
@@ -136,7 +138,7 @@ let rec seniority_exn t1 t2 =
         else if more then 1
         else 0
     | List (x, None), List (x', None) ->
-      if Int.(List.length x > List.length x') then seniority_lists_exn x x'
+      if Int.(>) (List.length x) (List.length x') then seniority_lists_exn x x'
         else -1 * (seniority_lists_exn x' x)
     | Record (x, None), Record (x', None)
     | Choice (x', None), Choice (x, None) -> seniority_maps_exn x x'
@@ -155,8 +157,9 @@ and seniority_maps_exn x x' =
   let comp_res = ref [] in
   let validate map ~key ~data:(guard, term) =
     let guard', term' = SM.find_exn map key in
-    seniority_exn guard' guard in
-  let _ = if Int.(SM.length x > SM.length x') then
+    (* TODO fix guard comparison *)
+    seniority_exn term' term in
+  let _ = if Int.(>) (SM.length x) (SM.length x') then
     SM.iter ~f:(fun ~key ~data -> 
       comp_res := (validate x ~key ~data) :: !comp_res
     ) x'

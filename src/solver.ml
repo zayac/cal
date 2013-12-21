@@ -133,6 +133,20 @@ let get_choice_term_exn =
   | Nil -> String.Map.empty
   | _ -> invalid_arg "record as a term is expected"
 
+let unwrap_record_exn =
+  let open Term in
+  function
+  | Record (h, v) -> h, v
+  | Nil -> String.Map.empty, None
+  | _ -> invalid_arg "record as a term is expected"
+
+let unwrap_choice_exn =
+  let open Term in
+  function
+  | Choice (h, v) -> h, v
+  | Nil -> String.Map.empty, None
+  | _ -> invalid_arg "record as a term is expected"
+
 type bound =
   | UpperB
   | LowerB
@@ -141,27 +155,45 @@ type map_type =
   | RecordMap
   | ChoiceMap
 
-let rec bounding_term_exn bound constrs term =
+let get_bound_exn bound constrs x =
+  let cstr = String.Map.find_exn constrs x in
+  let low, up = cstr.bounds in
+  if Poly.(bound = LowerB) then
+    match low with
+    | None -> invalid_arg
+      (Printf.sprintf "lower bound for variable $%s does not exist" x)
+    | Some t -> t
+  else
+    begin
+    match up with
+    | None -> invalid_arg
+      (Printf.sprintf "upper bound for variable $%s does not exist" x)
+    | Some t -> t
+  end
+
+let rec bounding_map_exn bound constrs mtype x tl =
+  let module SM = String.Map in
+  let f ~key ~data:(g, t) map =
+    SM.add map ~key ~data:(bounding_term_exn bound constrs g,
+      bounding_term_exn bound constrs t) in
+  let map = SM.fold ~init:SM.empty ~f x in
+  let map = match tl with
+  | None -> map
+  | Some var ->
+    let tlrec = get_bound_exn bound constrs var in
+    let tail = if mtype = RecordMap then get_record_term_exn tlrec
+      else get_choice_term_exn tlrec in
+    SM.fold ~init:map ~f:(fun ~key ~data acc -> SM.add ~key ~data acc) tail in
+  if mtype = RecordMap then Term.Record (map, None)
+  else Term.Choice (map, None)
+
+and  bounding_term_exn bound constrs term =
   let open Term in
   match term with
   (* the case when [], {} [nil, nil], etc. are treated as nil *)
   | t when Poly.(Term.is_nil t = Some true) -> Nil
   | Nil | Int _ | Symbol _ -> term
-  | Var x ->
-    let cstr = String.Map.find_exn constrs x in
-    let low, up = cstr.bounds in
-    if Poly.(bound = LowerB) then
-      match low with
-      | None -> invalid_arg
-        (Printf.sprintf "lower bound for variable $%s does not exist" x)
-      | Some t -> t
-    else
-      begin
-        match up with
-        | None -> invalid_arg
-          (Printf.sprintf "upper bound for variable $%s does not exist" x)
-        | Some t -> t
-      end
+  | Var x -> get_bound_exn bound constrs x
   | Tuple x -> Tuple (List.map ~f:(bounding_term_exn bound constrs) x)
   | List (x, tail) ->
     let tl = match tail with
@@ -169,8 +201,10 @@ let rec bounding_term_exn bound constrs term =
     | Some var ->
       get_list_term_exn (bounding_term_exn bound constrs (Var var)) in
     List ((List.map ~f:(bounding_term_exn bound constrs) x) @ tl, None)
+  | Record (x, tl) -> bounding_map_exn bound constrs RecordMap x tl
+  | Choice (x, tl) -> bounding_map_exn bound constrs ChoiceMap x tl
 
-let verify_collection var col term f =
+let verify_collection_exn var col term f =
   let open Term in
   match col, term with
   | None, _
@@ -190,51 +224,127 @@ let set_bound_exn depth bound constrs var term =
     | Record _ -> add_record_cstr_exn constrs var String.Set.empty
     | Choice _ -> add_choice_cstr_exn constrs var String.Set.empty
     | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs in
-  let b = if bound = UpperB then "lowest upper bound"
-    else "greatest upper bound" in
+  let b = if bound = UpperB then
+    (String.make (depth + 1) ' ') ^ "setting least upper bound"
+    else (String.make (depth + 1) ' ') ^ "setting greatest lower bound" in
   String.Map.change constrs var (fun v -> match bound, v, term with
     (* no constraints yet *)
     | LowerB, None, t ->
-      LOG "setting %s for variable $%s to %s" b var (Term.to_string Term.Nil)
-        LEVEL TRACE;
+      LOG "%s for variable $%s to %s" b var (Term.to_string Term.Nil)
+      LEVEL TRACE;
       Some { bounds = (Some t, Some Term.Nil); collection = None }
     | UpperB, None, t ->
+      LOG "%s for variable $%s to %s" b var (Term.to_string Term.Nil)
+        LEVEL TRACE;
       Some { bounds = (None, Some t); collection = None }
     (* the greatest lowest bound is not set yet *)
     | LowerB, (Some ({ bounds = (None, ub); collection = col } as el)), _ ->
-      LOG "setting %s for variable $%s to %s" b var (Term.to_string term)
-        LEVEL TRACE;
-      verify_collection var col term (Some {el with bounds = (Some term, ub)})
+      LOG "%s for variable $%s to %s" b var (Term.to_string term) LEVEL TRACE;
+      verify_collection_exn var col term
+        (Some {el with bounds = (Some term, ub)})
     (* the greatest lowest bound exists (try to shrink) *)
     | LowerB, ((Some { bounds = (Some oldt, ub); collection = col}) as el),
         newt ->
-      verify_collection var col term
+      verify_collection_exn var col term
         (if Term.seniority_exn oldt newt = 1 then begin
-          LOG "setting %s for variable $%s to %s" b var (Term.to_string newt)
+          LOG "%s for variable $%s to %s" b var (Term.to_string newt)
             LEVEL TRACE;
-           Some { bounds = (Some newt, ub); collection = col }
-           end else el
+          Some { bounds = (Some newt, ub); collection = col }
+         end else el
         )
     (* the least upper bound is not set yet *)
     | UpperB, (Some ({ bounds = (lb, None); collection = col } as el)), _ ->
-      LOG "setting %s for variable $%s to %s" b var (Term.to_string term)
-        LEVEL TRACE;
-      verify_collection var col term (Some {el with bounds = (lb, Some term)})
+      LOG "%s for variable $%s to %s" b var (Term.to_string term) LEVEL TRACE;
+      verify_collection_exn var col term
+        (Some {el with bounds = (lb, Some term)})
     (* the least upper bound exists (try to shrink) *)
     | UpperB, ((Some { bounds = (lb, Some oldt); collection = col}) as el),
         newt ->
-      verify_collection var col term
+      verify_collection_exn var col term
         (if Term.seniority_exn newt oldt = 1 then begin
-          LOG "setting %s for variable $%s to %s" b var (Term.to_string newt)
+          LOG "%s for variable $%s to %s" b var (Term.to_string newt)
             LEVEL TRACE;
            Some { bounds = (lb, Some newt); collection = col}
          end else el
         )
   )
 
-let rec solve_senior_exn depth bound constrs left right =
+let map_to_nil_exn depth bound constrs h v =
+  let open Term in
+  let verify ~key ~data constrs = match data with
+  | Var t, Var t' ->
+    let constrs = set_bound_exn depth bound constrs t Nil in
+    set_bound_exn depth bound constrs t' Nil
+  | Var t, (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _)
+  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _), Var t ->
+    set_bound_exn depth bound constrs t Nil
+  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
+    (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
+    constrs in
+  let constrs = match v with
+  | None -> constrs
+  | Some t -> set_bound_exn depth bound constrs t Nil in
+  String.Map.fold ~init:constrs ~f:verify h 
+
+(* solve seniority relation for record and choice *)
+let rec solve_map_exn depth bound constrs mtype left right =
+  let module SM = String.Map in
+  let module SS = String.Set in
+  let (r, v), (r', v') =
+    if mtype = RecordMap then
+      unwrap_record_exn left, unwrap_record_exn right
+    else unwrap_choice_exn left, unwrap_choice_exn right in
+  (* resolve terms that are associated with same labels in both maps.
+     E.g. from { a, b, c, d | $x } and { b, c, e, f | $y }, terms with labels b
+     and c will be removed. *)
+  let set, set' = SS.of_list (SM.keys r), SS.of_list (SM.keys r') in
+  let solve constrs l =
+    let (t1, t2), (t1', t2') = SM.find_exn r l, SM.find_exn r' l in
+    let constrs =
+      solve_senior_exn (depth + 1) bound constrs t1 t1' in
+    solve_senior_exn (depth + 1) bound constrs t2 t2' in
+  let constrs =
+    SS.fold ~init:constrs ~f:solve (SS.inter set set') in
+  let set, set' = SS.diff set set', SS.diff set' set in
+  (* In records (choices) all labels are specified in the right (left) term
+     must be also present in the left (right) term, otherwise this is an error.
+     E.g. {a, b, c, d} <= {a, b, c, e | $x } -- left term lacks e
+     (: a, b, c, e | $x :) <= (: a, b, c, d :) -- right term lacks e. *)
+  let _ = if (mtype = RecordMap && v = None && not (SS.is_empty set') ||
+    (mtype = ChoiceMap && v' = None && not (SS.is_empty set))) then
+    let ts1, ts2 = Term.to_string left, Term.to_string right in
+    let ts1, ts2 = if mtype = RecordMap then ts1, ts2 else ts2, ts1 in
+    unsat_error (Printf.sprintf "term %s contains labels that are not \
+      presentedin term %s" ts2 ts1) in
+  let from_set, from_map, from_var, to_map, to_var =
+    if bound = LowerB then set, r, v, r', v' else set', r', v', r, v in
+  let apply to_var =
+    let tail_map = SM.empty in
+    let set_tail_var tail_map l =
+      let (t1, t2) = SM.find_exn from_map l in
+      SM.add tail_map l (bounding_term_exn UpperB constrs t1,
+        bounding_term_exn UpperB constrs t2) in
+    let tail_map = SS.fold ~init:tail_map ~f:set_tail_var from_set in
+    (* The content of one variable is copied to another. *)
+    let apply' from_var =
+      let unwrap = if mtype = RecordMap then get_record_term_exn
+        else get_choice_term_exn in
+      let add ~key ~data tail_map =
+        if not (SM.mem to_map key) then
+          SM.add tail_map ~key ~data
+        else tail_map in
+      SM.fold ~init:tail_map ~f:add
+        (unwrap (bounding_term_exn UpperB constrs (Term.Var from_var))) in
+    let tail_map = Option.value_map ~default:tail_map ~f:apply' from_var in
+    if mtype = RecordMap then
+      set_bound_exn depth bound constrs to_var (Term.Record (tail_map, None))
+    else
+      set_bound_exn depth bound constrs  to_var (Term.Choice (tail_map, None)) in
+  Option.value_map ~default:constrs ~f:apply to_var
+
+and solve_senior_exn depth bound constrs left right =
   LOG "%sresolving %s for constraint %s" (String.make depth ' ')
-    (if bound = UpperB then "lowest upper bound" else "greatest lower bound")
+    (if bound = UpperB then "least upper bound" else "greatest lower bound")
     (Constr.to_string ([left], [right])) LEVEL TRACE;
   let error t1 t2 =
     unsat_error
@@ -251,14 +361,16 @@ let rec solve_senior_exn depth bound constrs left right =
       else
         set_bound_exn depth bound constrs t'
           (bounding_term_exn UpperB constrs left)
-    | (Nil | Int _ | Symbol _ | Tuple _ | List _), Var t ->
+    | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
+      Var t ->
       if Poly.(bound = UpperB) then
         solve_senior_exn (depth + 1) bound constrs left
           (bounding_term_exn UpperB constrs right)
       else
         set_bound_exn depth bound constrs t
           (bounding_term_exn UpperB constrs left)
-    | Var t, (Nil | Int _ | Symbol _ | Tuple _ | List _) ->
+    | Var t,
+      (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
       if Poly.(bound = LowerB) then
         solve_senior_exn (depth + 1) bound constrs
           (bounding_term_exn UpperB constrs left)
@@ -326,6 +438,18 @@ let rec solve_senior_exn depth bound constrs left right =
           (Term.to_string right)
         ) in
         List.fold_left ~init:constrs ~f:verify l 
+    | Record _, Record _ ->
+      solve_map_exn depth bound constrs RecordMap left right
+    | Choice _, Choice _ ->
+      solve_map_exn depth bound constrs ChoiceMap left right
+    | Nil, Choice (h, v) when Poly.(bound = LowerB) ->
+      map_to_nil_exn depth bound constrs h v
+    | Nil, Record (h, v) when Poly.(bound = LowerB) ->
+      map_to_nil_exn depth bound constrs h v
+    | Choice (h, v), Nil when Poly.(bound = UpperB) ->
+      map_to_nil_exn depth bound constrs h v
+    | Record (h, v), Nil when Poly.(bound = UpperB) ->
+      map_to_nil_exn depth bound constrs h v
     | t, t' ->
       if Int.(Term.seniority_exn t t' = -1) then error t t'
       else constrs
@@ -338,9 +462,9 @@ let resolve_bound_constraints (constrs : var_constr String.Map.t) topo =
         ~f:(fun t' -> cstrs := solve_senior_exn 0 bound !cstrs t t')
         right
       ) left in
-  LOG "setting upper bounds for constraints" LEVEL TRACE;
+  LOG "setting least upper bounds for constraints" LEVEL TRACE;
   List.iter ~f:(apply UpperB) (List.rev topo);
-  LOG "setting lower bounds for constraints" LEVEL TRACE;
+  LOG "setting greatest lower bounds for constraints" LEVEL TRACE;
   List.iter ~f:(apply LowerB) topo;
   !cstrs
 

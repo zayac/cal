@@ -24,6 +24,8 @@ Executable cal
   BuildTools:     ocamlbuild, menhir
   MainIs:         main.ml
   BuildDepends:   core, ocamlgraph, bolt
+  ByteOpt:        -w A-4
+  NativeOpt:      -w A-4
 
 Document "cal-api"
   Title:              API reference for CAL

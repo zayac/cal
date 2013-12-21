@@ -35,11 +35,17 @@ let print_constraints map =
     match data.collection with
     | None -> ()
     | Some (RecordWoLabels x) ->
-      Printf.printf "$%s is a record without labels {%s}\n" key
-      (String.concat ~sep:", " (String.Set.to_list x))
+      let l = if String.Set.is_empty x then ""
+      else
+        Printf.sprintf " without labels {%s}"
+        (String.concat ~sep:", " (String.Set.to_list x)) in
+      Printf.printf "$%s is a record%s\n" key l
     | Some (ChoiceWoLabels x) ->
-      Printf.printf "$%s is a choice without labels {%s}\n" key
-      (String.concat ~sep:", " (String.Set.to_list x))
+      let l = if String.Set.is_empty x then ""
+      else
+        Printf.sprintf " without labels {%s}"
+        (String.concat ~sep:", " (String.Set.to_list x)) in
+      Printf.printf "$%s is a choice%s\n" key l
     | Some ListCol -> Printf.printf "$%s is a list\n" key in
   String.Map.iter ~f map
 
