@@ -1,0 +1,10 @@
+nil <= $a <= nil
+$a is a list
+(:a: nil, aa: 10, c: t:) <= $b <= (:a: nil, aa: 10, c: t:)
+$b is a choice without labels {b}
+(:a: nil, aa: 10:) <= $d <= (:a: nil, aa: 10:)
+$d is a choice without labels {c}
+[35, 42] <= $l <= nil
+$l is a list
+(:a: 10, c: t:) <= $x <= (:a: nil, aa: 10, c: t:)
+$x is a choice without labels {b}

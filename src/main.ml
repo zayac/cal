@@ -50,6 +50,9 @@ let print_constraints map =
   String.Map.iter ~f map
 
 let loop dot_output filename =
+(*    let test = Term.Record (String.Map.singleton "b" (Term.Tuple [Term.Symbol "not"; Term.Nil], Term.Nil), None) in
+    print_endline (Term.to_string test);
+    Printf.printf "%b" (Term.is_nil_exn test); *)
   Location.filename := filename;
   try
     LOG "reading and parsing constraints from %s" filename LEVEL INFO;

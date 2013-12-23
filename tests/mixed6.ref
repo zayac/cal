@@ -1,0 +1,4 @@
+[35] <= $l <= nil
+$l is a list
+(:a: 10, c: t:) <= $x <= nil
+$x is a choice without labels {b}

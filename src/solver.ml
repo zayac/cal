@@ -215,15 +215,39 @@ let verify_collection_exn var col term f =
   | _ -> unsat_error ("constraint violation for variable $" ^ var)
 
 let set_bound_exn depth bound constrs var term =
+  let module SS = String.Set in
+  let module SM = String.Map in
   let term = Term.canonize term in
   let term = if Term.is_nil_exn term then Term.Nil else term in
+  (* add collection constraints *)
   let constrs =
     let open Term in
     match term with
     | List _ -> add_list_cstr_exn constrs var
-    | Record _ -> add_record_cstr_exn constrs var String.Set.empty
-    | Choice _ -> add_choice_cstr_exn constrs var String.Set.empty
+    | Record _ -> add_record_cstr_exn constrs var SS.empty
+    | Choice _ -> add_choice_cstr_exn constrs var SS.empty
     | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs in
+  (* satisfy collection constraints *)
+  let term = match SM.find constrs var with
+  | None -> term
+  | Some x -> match term, x.collection with
+    | Term.Record (x, None), Some (RecordWoLabels set) ->
+      if bound = LowerB then
+        Term.Record (SS.fold ~init:x ~f:SM.remove set, None)
+      else if not (SS.is_empty (SS.inter set (SS.of_list (SM.keys x)))) then
+        unsat_error (Printf.sprintf "constraint violation: variable $%s must \
+          be a record without labels {%s}" var
+          (String.concat ~sep:", " (SS.to_list set)))
+      else term
+    | Term.Choice (x, None), Some (ChoiceWoLabels set) ->
+      if bound = UpperB then
+        Term.Choice (SS.fold ~init:x ~f:SM.remove set, None)
+      else if not (SS.is_empty (SS.inter set (SS.of_list (SM.keys x)))) then
+        unsat_error (Printf.sprintf "constraint violation: variable $%s must \
+          be a choice without labels {%s}" var
+          (String.concat ~sep:", " (SS.to_list set)))
+      else term
+    | _ -> term in
   let b = if bound = UpperB then
     (String.make (depth + 1) ' ') ^ "setting least upper bound"
     else (String.make (depth + 1) ' ') ^ "setting greatest lower bound" in
@@ -356,11 +380,26 @@ and solve_senior_exn depth bound constrs left right =
     match left, right with
     | Var t, Var t' ->
       if Poly.(bound = UpperB) then
-        set_bound_exn depth bound constrs t
-          (bounding_term_exn UpperB constrs right)
-      else
-        set_bound_exn depth bound constrs t'
-          (bounding_term_exn UpperB constrs left)
+        let bound_term = bounding_term_exn UpperB constrs right in
+        let constrs = set_bound_exn depth bound constrs t bound_term in
+        match String.Map.find constrs t' with
+        | None -> constrs
+        | Some cstr -> match cstr.collection with
+          | None -> constrs
+          | Some (RecordWoLabels s) -> add_record_cstr_exn constrs t s
+          | Some (ChoiceWoLabels s) -> add_choice_cstr_exn constrs t s
+          | Some ListCol -> add_list_cstr_exn constrs t
+      else begin
+        let bound_term = bounding_term_exn UpperB constrs left in
+        let constrs = set_bound_exn depth bound constrs t' bound_term in
+        match String.Map.find constrs t with
+        | None -> constrs
+        | Some cstr -> match cstr.collection with
+          | None -> constrs
+          | Some (RecordWoLabels s) -> add_record_cstr_exn constrs t' s
+          | Some (ChoiceWoLabels s) -> add_choice_cstr_exn constrs t' s
+          | Some ListCol -> add_list_cstr_exn constrs t'
+      end
     | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
       Var t ->
       if Poly.(bound = UpperB) then
@@ -393,6 +432,14 @@ and solve_senior_exn depth bound constrs left right =
       (* an error if the tail of the right term is not nil *)
       let _ = if Poly.(v = None && rem2 <> [] &&
         Term.is_nil (List (rem2, None)) <> Some true) then error left right in
+      (* an error if the upper bound for tail variable in the right list makes
+         the right list longer then the left one. *)
+      let _ = if Poly.(rem1 = [] && rem2 = [] &&
+        Option.value_map ~default:false
+          ~f:(fun x -> Term.is_nil
+            (bounding_term_exn UpperB constrs (Var x)) <> Some true
+          ) v') then
+        error left right in
       let rem1, rem2, what, where =
         if Poly.(bound = LowerB) then rem1, rem2, v, v'
         else rem2, rem1, v', v in
@@ -419,25 +466,39 @@ and solve_senior_exn depth bound constrs left right =
           (get_list_term_exn (bounding_term_exn UpperB constrs (Var var))) in
         set_bound_exn depth bound constrs var' (List (!tail_list, None))
       end
-    | List (l, v), Nil when Poly.(bound = UpperB) ->
-      let verify constrs = function
-      | Var t -> set_bound_exn depth bound constrs t Nil
-      | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _
-      | Choice _ -> constrs in
-      let constrs = match v with
-        | None -> constrs
-        | Some x -> set_bound_exn depth bound constrs x Nil in
-      List.fold_left ~init:constrs ~f:verify l
-    | Nil, List (l, v) when Poly.(bound = LowerB) ->
-      let verify constrs = function
-      | Var t -> set_bound_exn depth bound constrs t Nil
-      | Nil -> constrs
-      | t when Poly.(Term.is_nil t = Some true) -> constrs
-      | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
-        unsat_error (Printf.sprintf "list %s is not nil"
-          (Term.to_string right)
-        ) in
-        List.fold_left ~init:constrs ~f:verify l 
+    | List (l, v), Nil ->
+      if Poly.(bound = UpperB) then
+        let verify constrs = function
+        | Var t -> set_bound_exn depth bound constrs t Nil
+        | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _
+        | Choice _ -> constrs in
+        let constrs = match v with
+          | None -> constrs
+          | Some x -> set_bound_exn depth bound constrs x Nil in
+        List.fold_left ~init:constrs ~f:verify l
+      else
+        let constrs = List.fold_left ~init:constrs
+          ~f:(fun c x -> solve_senior_exn (depth + 1) bound c x Nil) l in
+        Option.value_map ~default:constrs
+          ~f:(fun x -> solve_senior_exn (depth + 1) bound constrs (Var x) Nil)
+          v
+    | Nil, List (l, v) ->
+      if Poly.(bound = LowerB) then
+        let verify constrs = function
+        | Var t -> set_bound_exn depth bound constrs t Nil
+        | Nil -> constrs
+        | t when Poly.(Term.is_nil t = Some true) -> constrs
+        | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
+          unsat_error (Printf.sprintf "list %s is not nil"
+            (Term.to_string right)
+          ) in
+          List.fold_left ~init:constrs ~f:verify l
+      else
+        let constrs = List.fold_left ~init:constrs
+          ~f:(fun c x -> solve_senior_exn (depth + 1) bound c Nil x) l in
+        Option.value_map ~default:constrs
+          ~f:(fun x -> solve_senior_exn (depth + 1) bound constrs Nil (Var x))
+          v
     | Record _, Record _ ->
       solve_map_exn depth bound constrs RecordMap left right
     | Choice _, Choice _ ->

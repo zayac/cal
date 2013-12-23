@@ -48,6 +48,24 @@ let rec to_string t =
   | Choice (x, tail) -> print_dict x tail "(:" ":)"
   | Var x -> "$" ^ x
 
+let rec vars t =
+  let module SS = String.Set in
+  let module SM = String.Map in
+  let module L = List in
+  match t with
+  | Var v -> String.Set.singleton v
+  | Nil | Int _ | Symbol _ -> SS.empty
+  | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x)
+  | List (x, tail) ->
+    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
+    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x))
+  | Record (map, v)
+  | Choice (map, v) ->
+    let f ~key:_ ~data:(g, t) acc =
+    SS.union acc (SS.union (vars g) (vars t)) in
+    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
+    SS.union tl (SM.fold ~init:SS.empty ~f:f map)
+
 let rec is_nil = function
   | Nil -> Some true
   | List (x, None) ->
@@ -56,16 +74,10 @@ let rec is_nil = function
     else if List.exists ~f:(Poly.(=) (Some false)) nil_list then
       Some false
     else Some true
-  | Record (x, None) ->
-    let is_element_nil (g, t) =
-      match is_nil g with
-      | None | Some true -> None
-      | Some false -> is_nil t in
-    let nil_list = (List.map ~f:is_element_nil (String.Map.data x)) in
-    if List.exists ~f:is_none nil_list then None
-    else if List.exists ~f:(Poly.(=) (Some false)) nil_list then
-      Some false
-    else Some true
+  | Record (x, None) as t ->
+    if String.Map.is_empty x then Some true
+    else if String.Set.is_empty (vars t) then Some false
+    else None
   | Var _
   | List (_, Some _)
   | Record (_, Some _) -> None
@@ -76,11 +88,10 @@ let rec is_nil = function
       match t with
       | Nil -> true
       | List (x, None) -> List.for_all ~f:is_nil_exn x
-      | Record (x, None) ->
-        let is_element_nil (g, t) =
-          if is_nil_exn g then true
-          else is_nil_exn t in 
-        String.Map.for_all ~f:is_element_nil x 
+      | Record (x, None) as t ->
+        if String.Map.is_empty x then true
+        else if String.Set.is_empty (vars t) then false
+        else raise (Non_Ground t)
       | Var _
       | List (_, Some _)
       | Record (_, Some _) -> raise (Non_Ground t)
@@ -173,22 +184,4 @@ and seniority_maps_exn x x' =
   else if less then -1
   else if more then 1
   else 0
-
-let rec vars t =
-  let module SS = String.Set in
-  let module SM = String.Map in
-  let module L = List in
-  match t with
-  | Var v -> String.Set.singleton v
-  | Nil | Int _ | Symbol _ -> SS.empty
-  | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x)
-  | List (x, tail) ->
-    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
-    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x))
-  | Record (map, v)
-  | Choice (map, v) ->
-    let f ~key:_ ~data:(g, t) acc =
-    SS.union acc (SS.union (vars g) (vars t)) in
-    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
-    SS.union tl (SM.fold ~init:SS.empty ~f:f map)
 
