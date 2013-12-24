@@ -33,7 +33,7 @@ Document "cal-api"
   Type:               OCamlbuild (0.3)
   BuildTools:         ocamlbuild, ocamldoc
   XOCamlbuildPath:    src
-  XOCamlbuildModules: Term, Constr, Network, Solver
+  XOCamlbuildModules: Term, Constr, Network, Solver, Equations
 
 Test main
   TestTools:      perl

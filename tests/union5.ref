@@ -1,0 +1,4 @@
+{c: 6, d: 4, e: 5} <= $a <= nil
+$a is a record
+{a: 1, b: 2} <= $b <= nil
+$b is a record without labels {c}

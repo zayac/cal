@@ -375,6 +375,7 @@ and solve_senior_exn depth bound constrs left right =
       (Printf.sprintf "the seniority relation %s <= %s does not hold"
         (Term.to_string t1)
         (Term.to_string t2)) in
+  let left, right = Equations.union left, Equations.union right in
   try
     let open Term in
     match left, right with
