@@ -40,29 +40,29 @@ let rec to_string t =
   | Nil -> "nil"
   | Int x -> string_of_int x
   | Symbol x -> x
-  | Tuple x -> S.concat ["("; S.concat ~sep:", " (L.map ~f:to_string x); ")"]
+  | Tuple x -> S.concat ["("; S.concat ~sep:" " (L.map ~f:to_string x); ")"]
   | List (x, tail) ->
-    S.concat ["["; S.concat ~sep:", " (L.map ~f:to_string x); 
+    S.concat ["["; S.concat ~sep:", " (L.map ~f:to_string x);
       tail_to_string tail; "]"]
   | Record (x, tail) -> print_dict x tail "{" "}"
   | Choice (x, tail) -> print_dict x tail "(:" ":)"
   | Var x -> "$" ^ x
 
-let rec vars t =
+let rec get_vars t =
   let module SS = String.Set in
   let module SM = String.Map in
   let module L = List in
   match t with
   | Var v -> String.Set.singleton v
   | Nil | Int _ | Symbol _ -> SS.empty
-  | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x)
+  | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_vars x)
   | List (x, tail) ->
     let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
-    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:vars x))
+    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_vars x))
   | Record (map, v)
   | Choice (map, v) ->
     let f ~key:_ ~data:(g, t) acc =
-    SS.union acc (SS.union (vars g) (vars t)) in
+    SS.union acc (SS.union (get_vars g) (get_vars t)) in
     let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
     SS.union tl (SM.fold ~init:SS.empty ~f:f map)
 
@@ -76,7 +76,7 @@ let rec is_nil = function
     else Some true
   | Record (x, None) as t ->
     if String.Map.is_empty x then Some true
-    else if String.Set.is_empty (vars t) then Some false
+    else if String.Set.is_empty (get_vars t) then Some false
     else None
   | Var _
   | List (_, Some _)
@@ -84,13 +84,13 @@ let rec is_nil = function
   | Int _ | Symbol _ | Tuple _ | Choice (_, _) -> Some false
 
   let rec is_nil_exn t =
-    try 
+    try
       match t with
       | Nil -> true
       | List (x, None) -> List.for_all ~f:is_nil_exn x
       | Record (x, None) as t ->
         if String.Map.is_empty x then true
-        else if String.Set.is_empty (vars t) then false
+        else if String.Set.is_empty (get_vars t) then false
         else raise (Non_Ground t)
       | Var _
       | List (_, Some _)
@@ -171,11 +171,11 @@ and seniority_maps_exn x x' =
     (* TODO fix guard comparison *)
     seniority_exn term' term in
   let _ = if Int.(>) (SM.length x) (SM.length x') then
-    SM.iter ~f:(fun ~key ~data -> 
+    SM.iter ~f:(fun ~key ~data ->
       comp_res := (validate x ~key ~data) :: !comp_res
     ) x'
   else
-    SM.iter ~f:(fun ~key ~data -> 
+    SM.iter ~f:(fun ~key ~data ->
       comp_res := (validate x' ~key ~data) :: !comp_res
     ) x in
   let less = List.exists ~f:(Int.(=) (-1)) !comp_res in
@@ -184,4 +184,46 @@ and seniority_maps_exn x x' =
   else if less then -1
   else if more then 1
   else 0
+
+let not_t t = Tuple [Symbol "not"; t]
+let or_t tl = Tuple (Symbol "or" :: tl)
+let and_t t1 t2 = Tuple [Symbol "and"; t1; t2]
+
+let is_not = function
+| Tuple [Symbol "not"; _] -> true
+| _ -> false
+
+let is_or = function
+| Tuple ((Symbol "or") :: t1 :: t2 :: tl)  -> true
+| _ -> false
+
+let is_and = function
+| Tuple [Symbol "and"; _; _] -> true
+| _ -> false
+
+let rec get_external_vars t =
+  let module SS = String.Set in
+  let module SM = String.Map in
+  let module L = List in
+  match t with
+  | Var v -> String.Set.singleton v
+  | Nil | Int _ | Symbol _ -> SS.empty
+  | Tuple x ->
+    if is_not t || is_or t || is_and t then
+      begin
+        LOG "term %s is a boolean expression" (to_string t) LEVEL TRACE; 
+        SS.empty
+      end
+    else
+      L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_external_vars x)
+  | List (x, tail) ->
+    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
+    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_external_vars x))
+  | Record (map, v)
+  | Choice (map, v) ->
+    let f ~key:_ ~data:(g, t) acc =
+    SS.union acc (SS.union (get_external_vars g) (get_external_vars t)) in
+    let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
+    SS.union tl (SM.fold ~init:SS.empty ~f:f map)
+
 

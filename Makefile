@@ -1,38 +1,30 @@
-# OASIS_START
-# DO NOT EDIT (digest: 7b2408909643717852b95f994b273fee)
+#!/usr/bin/env make
 
-SETUP = ocaml setup.ml
+OCAMLBUILD = ocamlbuild
+OCAMLBUILD_OPT ?= -j 8
 
-build: setup.data
-	$(SETUP) -build $(BUILDFLAGS)
+SRC = src
+DOC = cal-api.docdir
 
-doc: setup.data build
-	$(SETUP) -doc $(DOCFLAGS)
+ifdef DEBUG_OCAMLBUILD
+	OCAMLBUILD_OPT += -classic-display
+endif
 
-test: setup.data build
-	$(SETUP) -test $(TESTFLAGS)
+all: byte native
 
-all:
-	$(SETUP) -all $(ALLFLAGS)
+byte: $(wildcard $(SRC)/*.ml $(SRC)/*.mli $(SRC)/lexer.mll $(SRC)/parser.mly)
+	$(OCAMLBUILD) -use-ocamlfind $(OCAMLBUILD_OPT) $(SRC)/main.byte
 
-install: setup.data
-	$(SETUP) -install $(INSTALLFLAGS)
+native: $(wildcard $(SRC)/*.ml $(SRC)/*.mli $(SRC)/lexer.mll $(SRC)/parser.mly)
+	$(OCAMLBUILD) -use-ocamlfind $(OCAMLBUILD_OPT) $(SRC)/main.native
 
-uninstall: setup.data
-	$(SETUP) -uninstall $(UNINSTALLFLAGS)
+doc: $(wildcard $(SRC)/*.ml $(SRC)/*.mli $(SRC)/lexer.mll $(SRC)/parser.mly)
+	$(OCAMLBUILD) -use-ocamlfind $(OCAMLBUILD_OPT) $(SRC)/$(DOC)/index.html
 
-reinstall: setup.data
-	$(SETUP) -reinstall $(REINSTALLFLAGS)
+test: byte
+	./scripts/run_all_tests.pl main.byte my myerr
+	./scripts/compare_results.pl ref my referr myerr
 
 clean:
-	$(SETUP) -clean $(CLEANFLAGS)
-
-distclean:
-	$(SETUP) -distclean $(DISTCLEANFLAGS)
-
-setup.data:
-	$(SETUP) -configure $(CONFIGUREFLAGS)
-
-.PHONY: build doc test all install uninstall reinstall clean distclean configure
-
-# OASIS_STOP
+	$(OCAMLBUILD) -clean
+	rm tests/*.my tests/*.myerr solver.log

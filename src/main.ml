@@ -1,6 +1,6 @@
 open Core.Std
 open Network
-open Solver
+open Constr
 
 (* module for creating dot-files *)
 module Dot = Graph.Graphviz.Dot(struct
@@ -49,6 +49,12 @@ let print_constraints map =
     | Some ListCol -> Printf.printf "$%s is a list\n" key in
   String.Map.iter ~f map
 
+(* let print_bool_constraints l =
+  print_string "\nThe following boolean expressions must be satisfiable:\n";
+  let f x = print_endline (Term.to_string x) in
+  List.iter ~f l
+*)
+
 let loop dot_output filename =
 (*    let test = Term.Record (String.Map.singleton "b" (Term.Tuple [Term.Symbol "not"; Term.Nil], Term.Nil), None) in
     print_endline (Term.to_string test);
@@ -63,8 +69,10 @@ let loop dot_output filename =
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
     LOG "unifying constraints represented as the graph" LEVEL INFO;
-    let bounds = unify_exn g in
+    let bounds = Solver.unify_exn g in
     let _ = print_constraints bounds in
+(*    if not (List.is_empty bool_constrs) then
+      print_bool_constraints bool_constrs *)
     ()
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg

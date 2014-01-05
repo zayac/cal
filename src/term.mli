@@ -53,6 +53,20 @@ val canonize : t -> t
     Throws an exception if one of the terms is not ground. *)
 val seniority_exn : t -> t -> int
 
-(** [vars t] returns a set of all variable strings [s] from terms of the
-    form [Var s] that are contained in [t]. *)
-val vars : t -> String.Set.t
+(** [get_vars t] returns a set of variable strings [s] from terms
+    of the form [Var s] that are contained in [t] *)
+val get_vars : t -> String.Set.t
+
+(** [get_external_vars t] returns a set of variable strings [s] from terms
+    of the form [Var s] that are contained in [t] and are not part of any
+    boolean expression (e.g. is part of tuples (not ...), (or ...), (and ...).
+    *)
+val get_external_vars : t -> String.Set.t
+
+val not_t : t -> t
+val or_t : t list -> t
+val and_t : t -> t -> t
+
+val is_not : t -> bool
+val is_or : t -> bool
+val is_and : t -> bool

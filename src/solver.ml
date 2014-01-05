@@ -1,23 +1,19 @@
 open Core.Std
 
-type collection_constr =
-  | RecordWoLabels of String.Set.t
-  | ChoiceWoLabels of String.Set.t
-  | ListCol
-
-type var_constr =
-  {
-    bounds     : Term.t option * Term.t option;
-    collection : collection_constr option;
-  }
-
 exception Unsatisfiability_Error of string
 
 let unsat_error msg =
   let open Errors in
   raise (Unsatisfiability_Error (error msg))
 
+(* all boolean constraints are put here in order to be resolved later *)
+let boolean_constrs = ref Constr.Set.empty
+
+(* a shorthand to add a new boolean constraint *)
+let add_bool_constr t = boolean_constrs := Constr.Set.add !boolean_constrs t
+
 let add_list_cstr_exn cstrs key =
+  let open Constr in
   LOG "variable %s must be a list" key LEVEL TRACE;
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil); collection = Some ListCol }
@@ -33,6 +29,7 @@ let add_list_cstr_exn cstrs key =
     )
 
 let add_record_cstr_exn cstrs key labels =
+  let open Constr in
   LOG "variable %s must be a record without labels {%s}" key
     (String.concat ~sep:", " (String.Set.to_list labels)) LEVEL TRACE;
   String.Map.change cstrs key (function
@@ -52,6 +49,7 @@ let add_record_cstr_exn cstrs key labels =
     )
 
 let add_choice_cstr_exn cstrs key labels =
+  let open Constr in
   LOG "variable %s must be a choice without labels {%s}" key
     (String.concat ~sep:", " (String.Set.to_list labels)) LEVEL TRACE;
   String.Map.change cstrs key (function
@@ -80,7 +78,7 @@ let rec resolve_collections_exn constrs = function
       let labels = String.Set.of_list (SM.keys map) in
       SM.fold
         ~init:(match var with
-          | None -> constrs 
+          | None -> constrs
           | Some x -> f constrs x labels
         )
         ~f:(fun ~key ~data acc ->
@@ -108,7 +106,7 @@ let rec resolve_collections_exn constrs = function
 (* resolve constraints on labels and collection types given the constraint
    schedule *)
 let set_collection_constrs_exn constrs =
-  let terms = List.fold ~init:[] 
+  let terms = List.fold ~init:[]
     ~f:(fun acc (left, right) -> acc @ left @ right) constrs in
   resolve_collections_exn String.Map.empty terms
 
@@ -157,6 +155,7 @@ type map_type =
 
 let get_bound_exn bound constrs x =
   let cstr = String.Map.find_exn constrs x in
+  let open Constr in
   let low, up = cstr.bounds in
   if Poly.(bound = LowerB) then
     match low with
@@ -205,6 +204,7 @@ and  bounding_term_exn bound constrs term =
   | Choice (x, tl) -> bounding_map_exn bound constrs ChoiceMap x tl
 
 let verify_collection_exn var col term f =
+  let open Constr in
   let open Term in
   match col, term with
   | None, _
@@ -228,11 +228,12 @@ let set_bound_exn depth bound constrs var term =
     | Choice _ -> add_choice_cstr_exn constrs var SS.empty
     | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs in
   (* satisfy collection constraints *)
+  let open Constr in
   let term = match SM.find constrs var with
   | None -> term
   | Some x -> match term, x.collection with
     | Term.Record (x, None), Some (RecordWoLabels set) ->
-      if bound = LowerB then
+      if Poly.(bound = LowerB) then
         Term.Record (SS.fold ~init:x ~f:SM.remove set, None)
       else if not (SS.is_empty (SS.inter set (SS.of_list (SM.keys x)))) then
         unsat_error (Printf.sprintf "constraint violation: variable $%s must \
@@ -240,7 +241,7 @@ let set_bound_exn depth bound constrs var term =
           (String.concat ~sep:", " (SS.to_list set)))
       else term
     | Term.Choice (x, None), Some (ChoiceWoLabels set) ->
-      if bound = UpperB then
+      if Poly.(bound = UpperB) then
         Term.Choice (SS.fold ~init:x ~f:SM.remove set, None)
       else if not (SS.is_empty (SS.inter set (SS.of_list (SM.keys x)))) then
         unsat_error (Printf.sprintf "constraint violation: variable $%s must \
@@ -248,10 +249,11 @@ let set_bound_exn depth bound constrs var term =
           (String.concat ~sep:", " (SS.to_list set)))
       else term
     | _ -> term in
-  let b = if bound = UpperB then
+  let b = if Poly.(bound = UpperB) then
     (String.make (depth + 1) ' ') ^ "setting least upper bound"
     else (String.make (depth + 1) ' ') ^ "setting greatest lower bound" in
-  String.Map.change constrs var (fun v -> match bound, v, term with
+  String.Map.change constrs var (fun v ->
+    match bound, v, term with
     (* no constraints yet *)
     | LowerB, None, t ->
       LOG "%s for variable $%s to %s" b var (Term.to_string Term.Nil)
@@ -270,7 +272,7 @@ let set_bound_exn depth bound constrs var term =
     | LowerB, ((Some { bounds = (Some oldt, ub); collection = col}) as el),
         newt ->
       verify_collection_exn var col term
-        (if Term.seniority_exn oldt newt = 1 then begin
+        (if Poly.(Term.seniority_exn oldt newt = 1) then begin
           LOG "%s for variable $%s to %s" b var (Term.to_string newt)
             LEVEL TRACE;
           Some { bounds = (Some newt, ub); collection = col }
@@ -285,7 +287,7 @@ let set_bound_exn depth bound constrs var term =
     | UpperB, ((Some { bounds = (lb, Some oldt); collection = col}) as el),
         newt ->
       verify_collection_exn var col term
-        (if Term.seniority_exn newt oldt = 1 then begin
+        (if Poly.(Term.seniority_exn newt oldt = 1) then begin
           LOG "%s for variable $%s to %s" b var (Term.to_string newt)
             LEVEL TRACE;
            Some { bounds = (lb, Some newt); collection = col}
@@ -308,7 +310,7 @@ let map_to_nil_exn depth bound constrs h v =
   let constrs = match v with
   | None -> constrs
   | Some t -> set_bound_exn depth bound constrs t Nil in
-  String.Map.fold ~init:constrs ~f:verify h 
+  String.Map.fold ~init:constrs ~f:verify h
 
 (* solve seniority relation for record and choice *)
 let rec solve_map_exn depth bound constrs mtype left right =
@@ -383,6 +385,7 @@ and solve_senior_exn depth bound constrs left right =
       if Poly.(bound = UpperB) then
         let bound_term = bounding_term_exn UpperB constrs right in
         let constrs = set_bound_exn depth bound constrs t bound_term in
+        let open Constr in
         match String.Map.find constrs t' with
         | None -> constrs
         | Some cstr -> match cstr.collection with
@@ -393,6 +396,7 @@ and solve_senior_exn depth bound constrs left right =
       else begin
         let bound_term = bounding_term_exn UpperB constrs left in
         let constrs = set_bound_exn depth bound constrs t' bound_term in
+        let open Constr in
         match String.Map.find constrs t with
         | None -> constrs
         | Some cstr -> match cstr.collection with
@@ -517,7 +521,7 @@ and solve_senior_exn depth bound constrs left right =
       else constrs
   with Term.Incomparable_Terms (t1, t2) -> error t1 t2
 
-let resolve_bound_constraints (constrs : var_constr String.Map.t) topo =
+let resolve_bound_constraints constrs topo =
   let cstrs = ref constrs in
   let apply bound (left, right) =
     List.iter ~f:(fun t -> List.iter
@@ -536,6 +540,6 @@ let unify_exn g =
   let topo = Network.traversal_order g in
   LOG "setting constraints on the type of constraint" LEVEL DEBUG;
   let constrs = set_collection_constrs_exn topo in
-  LOG "resolving bound constraints" LEVEL DEBUG; 
+  LOG "resolving bound constraints" LEVEL DEBUG;
   let constrs = resolve_bound_constraints constrs topo in
   constrs
