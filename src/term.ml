@@ -211,7 +211,7 @@ let rec get_external_vars t =
   | Tuple x ->
     if is_not t || is_or t || is_and t then
       begin
-        LOG "term %s is a boolean expression" (to_string t) LEVEL TRACE; 
+        Log.debugf "term %s is a boolean expression" (to_string t); 
         SS.empty
       end
     else
@@ -225,5 +225,4 @@ let rec get_external_vars t =
     SS.union acc (SS.union (get_external_vars g) (get_external_vars t)) in
     let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
     SS.union tl (SM.fold ~init:SS.empty ~f:f map)
-
 

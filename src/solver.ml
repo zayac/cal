@@ -14,7 +14,7 @@ let add_bool_constr t = boolean_constrs := Constr.Set.add !boolean_constrs t
 
 let add_list_cstr_exn cstrs key =
   let open Constr in
-  LOG "variable %s must be a list" key LEVEL TRACE;
+  Log.debugf "variable %s must be a list" key;
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil); collection = Some ListCol }
     | Some { bounds; collection } ->
@@ -30,8 +30,8 @@ let add_list_cstr_exn cstrs key =
 
 let add_record_cstr_exn cstrs key labels =
   let open Constr in
-  LOG "variable %s must be a record without labels {%s}" key
-    (String.concat ~sep:", " (String.Set.to_list labels)) LEVEL TRACE;
+  Log.debugf "variable %s must be a record without labels {%s}" key
+    (String.concat ~sep:", " (String.Set.to_list labels));
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil);
       collection = Some (RecordWoLabels labels) }
@@ -50,8 +50,8 @@ let add_record_cstr_exn cstrs key labels =
 
 let add_choice_cstr_exn cstrs key labels =
   let open Constr in
-  LOG "variable %s must be a choice without labels {%s}" key
-    (String.concat ~sep:", " (String.Set.to_list labels)) LEVEL TRACE;
+  Log.debugf "variable %s must be a choice without labels {%s}" key
+    (String.concat ~sep:", " (String.Set.to_list labels));
   String.Map.change cstrs key (function
     | None -> Some { bounds = (None, Some Term.Nil);
       collection = Some (ChoiceWoLabels labels) }
@@ -256,16 +256,14 @@ let set_bound_exn depth bound constrs var term =
     match bound, v, term with
     (* no constraints yet *)
     | LowerB, None, t ->
-      LOG "%s for variable $%s to %s" b var (Term.to_string Term.Nil)
-      LEVEL TRACE;
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string Term.Nil);
       Some { bounds = (Some t, Some Term.Nil); collection = None }
     | UpperB, None, t ->
-      LOG "%s for variable $%s to %s" b var (Term.to_string Term.Nil)
-        LEVEL TRACE;
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string Term.Nil);
       Some { bounds = (None, Some t); collection = None }
     (* the greatest lowest bound is not set yet *)
     | LowerB, (Some ({ bounds = (None, ub); collection = col } as el)), _ ->
-      LOG "%s for variable $%s to %s" b var (Term.to_string term) LEVEL TRACE;
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
       verify_collection_exn var col term
         (Some {el with bounds = (Some term, ub)})
     (* the greatest lowest bound exists (try to shrink) *)
@@ -273,14 +271,13 @@ let set_bound_exn depth bound constrs var term =
         newt ->
       verify_collection_exn var col term
         (if Poly.(Term.seniority_exn oldt newt = 1) then begin
-          LOG "%s for variable $%s to %s" b var (Term.to_string newt)
-            LEVEL TRACE;
+          Log.debugf "%s for variable $%s to %s" b var (Term.to_string newt);
           Some { bounds = (Some newt, ub); collection = col }
          end else el
         )
     (* the least upper bound is not set yet *)
     | UpperB, (Some ({ bounds = (lb, None); collection = col } as el)), _ ->
-      LOG "%s for variable $%s to %s" b var (Term.to_string term) LEVEL TRACE;
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
       verify_collection_exn var col term
         (Some {el with bounds = (lb, Some term)})
     (* the least upper bound exists (try to shrink) *)
@@ -288,8 +285,7 @@ let set_bound_exn depth bound constrs var term =
         newt ->
       verify_collection_exn var col term
         (if Poly.(Term.seniority_exn newt oldt = 1) then begin
-          LOG "%s for variable $%s to %s" b var (Term.to_string newt)
-            LEVEL TRACE;
+          Log.debugf "%s for variable $%s to %s" b var (Term.to_string newt);
            Some { bounds = (lb, Some newt); collection = col}
          end else el
         )
@@ -369,9 +365,9 @@ let rec solve_map_exn depth bound constrs mtype left right =
   Option.value_map ~default:constrs ~f:apply to_var
 
 and solve_senior_exn depth bound constrs left right =
-  LOG "%sresolving %s for constraint %s" (String.make depth ' ')
+  Log.debugf "%sresolving %s for constraint %s" (String.make depth ' ')
     (if bound = UpperB then "least upper bound" else "greatest lower bound")
-    (Constr.to_string ([left], [right])) LEVEL TRACE;
+    (Constr.to_string ([left], [right]));
   let error t1 t2 =
     unsat_error
       (Printf.sprintf "the seniority relation %s <= %s does not hold"
@@ -528,18 +524,18 @@ let resolve_bound_constraints constrs topo =
         ~f:(fun t' -> cstrs := solve_senior_exn 0 bound !cstrs t t')
         right
       ) left in
-  LOG "setting least upper bounds for constraints" LEVEL TRACE;
+  Log.debugf "setting least upper bounds for constraints";
   List.iter ~f:(apply UpperB) (List.rev topo);
-  LOG "setting greatest lower bounds for constraints" LEVEL TRACE;
+  Log.debugf "setting greatest lower bounds for constraints";
   List.iter ~f:(apply LowerB) topo;
   !cstrs
 
 let unify_exn g =
   (*let acyclic_g, loops = Network.to_acyclic g in*)
-  LOG "creating a traversal order for constraints" LEVEL DEBUG;
+  Log.debugf "creating a traversal order for constraints";
   let topo = Network.traversal_order g in
-  LOG "setting constraints on the type of constraint" LEVEL DEBUG;
+  Log.debugf "setting constraints on the type of constraint";
   let constrs = set_collection_constrs_exn topo in
-  LOG "resolving bound constraints" LEVEL DEBUG;
+  Log.debugf "resolving bound constraints";
   let constrs = resolve_bound_constraints constrs topo in
   constrs
