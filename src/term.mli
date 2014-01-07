@@ -63,10 +63,22 @@ val get_vars : t -> String.Set.t
     *)
 val get_external_vars : t -> String.Set.t
 
+(** [is_not t] converts a term [t] to the term [(not t)] *)
 val not_t : t -> t
+(** [or_t tl] converts a list of terms [tl] to the term [(or tl)] *)
 val or_t : t list -> t
+(** [and_t t t'] converts terms [t] and [t'] to the term [(and t t')] *)
 val and_t : t -> t -> t
 
+(** checks either a term is a 'not' logical expression *)
 val is_not : t -> bool
+(** checks either a term is an 'or' logical expression *)
 val is_or : t -> bool
+(** checks either a term is an 'and' logical expression *)
 val is_and : t -> bool
+(** checks either a term is a logical expression *)
+val is_logic : t -> bool
+
+(** checks either a term contains some logical expression inside (or is a
+    logical expression itself) *)
+val contains_logic : t -> bool

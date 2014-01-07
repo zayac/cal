@@ -201,6 +201,8 @@ let is_and = function
 | Tuple [Symbol "and"; _; _] -> true
 | _ -> false
 
+let rec is_logic t = is_not t || is_or t || is_and t
+
 let rec get_external_vars t =
   let module SS = String.Set in
   let module SM = String.Map in
@@ -209,16 +211,17 @@ let rec get_external_vars t =
   | Var v -> String.Set.singleton v
   | Nil | Int _ | Symbol _ -> SS.empty
   | Tuple x ->
-    if is_not t || is_or t || is_and t then
+    if is_logic t then
       begin
-        Log.debugf "term %s is a boolean expression" (to_string t); 
+        Log.debugf "term %s is a boolean expression" (to_string t);
         SS.empty
       end
     else
       L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_external_vars x)
   | List (x, tail) ->
     let tl = Option.value_map ~default:SS.empty ~f:SS.singleton tail in
-    SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_external_vars x))
+    SS.union tl
+      (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_external_vars x))
   | Record (map, v)
   | Choice (map, v) ->
     let f ~key:_ ~data:(g, t) acc =
@@ -226,3 +229,20 @@ let rec get_external_vars t =
     let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
     SS.union tl (SM.fold ~init:SS.empty ~f:f map)
 
+
+let rec contains_logic t =
+  let module SM = String.Map in
+  let module L = List in
+  match t with
+  | Nil | Int _ | Symbol _ | Var _ -> false
+  | Tuple x as el ->
+    if is_logic el then true
+    else L.fold_left ~init:false ~f:(fun acc v -> acc || (contains_logic v)) x
+  | List (x, _) ->
+    L.fold_left ~init:false ~f:(fun acc v -> acc || (contains_logic v)) x
+  | Record (map, _)
+  | Choice (map, _) ->
+    SM.fold ~init:false
+      ~f:(fun ~key ~data acc ->
+          let g, t = data in
+          acc || (contains_logic g) || (contains_logic t)) map

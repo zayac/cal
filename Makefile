@@ -27,4 +27,4 @@ test: byte
 
 clean:
 	$(OCAMLBUILD) -clean
-	rm tests/*.my tests/*.myerr solver.log
+	rm -f tests/*.my tests/*.myerr solver.log

@@ -16,7 +16,11 @@ let add_list_cstr_exn cstrs key =
   let open Constr in
   Log.debugf "variable %s must be a list" key;
   String.Map.change cstrs key (function
-    | None -> Some { bounds = (None, Some Term.Nil); collection = Some ListCol }
+    | None ->
+      Some {
+        bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
+        collection = Some ListCol
+        }
     | Some { bounds; collection } ->
       match collection with
       | Some (RecordWoLabels _) -> unsat_error
@@ -33,8 +37,10 @@ let add_record_cstr_exn cstrs key labels =
   Log.debugf "variable %s must be a record without labels {%s}" key
     (String.concat ~sep:", " (String.Set.to_list labels));
   String.Map.change cstrs key (function
-    | None -> Some { bounds = (None, Some Term.Nil);
-      collection = Some (RecordWoLabels labels) }
+    | None -> Some {
+        bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
+        collection = Some (RecordWoLabels labels)
+      }
     | Some { bounds; collection } ->
       match collection with
       | Some ListCol -> unsat_error
@@ -53,8 +59,9 @@ let add_choice_cstr_exn cstrs key labels =
   Log.debugf "variable %s must be a choice without labels {%s}" key
     (String.concat ~sep:", " (String.Set.to_list labels));
   String.Map.change cstrs key (function
-    | None -> Some { bounds = (None, Some Term.Nil);
-      collection = Some (ChoiceWoLabels labels) }
+    | None -> Some {
+        bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
+        collection = Some (ChoiceWoLabels labels) }
     | Some { bounds; collection } ->
       match collection with
       | Some ListCol -> unsat_error
@@ -156,7 +163,7 @@ type map_type =
 let get_bound_exn bound constrs x =
   let cstr = String.Map.find_exn constrs x in
   let open Constr in
-  let low, up = cstr.bounds in
+  let low, _, up, _ = cstr.bounds in
   if Poly.(bound = LowerB) then
     match low with
     | None -> invalid_arg
@@ -214,6 +221,36 @@ let verify_collection_exn var col term f =
   | Some ListCol, List _ -> f
   | _ -> unsat_error ("constraint violation for variable $" ^ var)
 
+
+let add_logical_bound_exn depth bound constrs var term =
+  let b = if Poly.(bound = UpperB) then
+    (String.make (depth + 1) ' ') ^
+      "setting a logical term as a least upper bound"
+    else (String.make (depth + 1) ' ') ^
+      "setting a logical term as a greatest lower bound" in
+  String.Map.change constrs var (fun v ->
+    let open Constr in
+    match bound, v with
+    (* no constraints yet *)
+    | LowerB, None ->
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
+      Some {
+        bounds = (None, Term.Set.singleton term, Some Term.Nil, Term.Set.empty);
+        collection = None
+      }
+    | UpperB, None ->
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
+      Some {
+        bounds = (None, Term.Set.empty, Some term, Term.Set.empty);
+        collection = None }
+    | LowerB, Some ({ bounds = glb, llb, gub, lub; collection = col } as el) ->
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
+      Some {el with bounds = (glb, Term.Set.add llb term, gub, lub)}
+    | UpperB, Some ({ bounds = glb, llb, gub, lub; collection = col } as el) ->
+      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
+      Some {el with bounds = (glb, llb, gub, Term.Set.add lub term)}
+  )
+
 let set_bound_exn depth bound constrs var term =
   let module SS = String.Set in
   let module SM = String.Map in
@@ -257,36 +294,44 @@ let set_bound_exn depth bound constrs var term =
     (* no constraints yet *)
     | LowerB, None, t ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string Term.Nil);
-      Some { bounds = (Some t, Some Term.Nil); collection = None }
+      Some {
+        bounds = (Some t, Term.Set.empty, Some Term.Nil, Term.Set.empty);
+        collection = None
+      }
     | UpperB, None, t ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string Term.Nil);
-      Some { bounds = (None, Some t); collection = None }
+      Some {
+        bounds = (None, Term.Set.empty, Some t, Term.Set.empty);
+        collection = None }
     (* the greatest lowest bound is not set yet *)
-    | LowerB, (Some ({ bounds = (None, ub); collection = col } as el)), _ ->
+    | LowerB, (Some ({ bounds = (None, s, ub, s'); collection = col } as el)),
+      _ ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
       verify_collection_exn var col term
-        (Some {el with bounds = (Some term, ub)})
+        (Some {el with bounds = (Some term, s, ub, s')})
     (* the greatest lowest bound exists (try to shrink) *)
-    | LowerB, ((Some { bounds = (Some oldt, ub); collection = col}) as el),
+    | LowerB, ((Some { bounds = (Some oldt, s, ub, s'); collection = col}) as el),
         newt ->
       verify_collection_exn var col term
         (if Poly.(Term.seniority_exn oldt newt = 1) then begin
           Log.debugf "%s for variable $%s to %s" b var (Term.to_string newt);
-          Some { bounds = (Some newt, ub); collection = col }
+          Some { bounds = (Some newt, s, ub, s'); collection = col }
          end else el
         )
     (* the least upper bound is not set yet *)
-    | UpperB, (Some ({ bounds = (lb, None); collection = col } as el)), _ ->
+    | UpperB, (Some ({ bounds = (lb, s, None, s'); collection = col } as el)),
+      _ ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
       verify_collection_exn var col term
-        (Some {el with bounds = (lb, Some term)})
+        (Some {el with bounds = (lb, s, Some term, s')})
     (* the least upper bound exists (try to shrink) *)
-    | UpperB, ((Some { bounds = (lb, Some oldt); collection = col}) as el),
-        newt ->
+    | UpperB,
+      ((Some { bounds = (lb, s, Some oldt, s'); collection = col}) as el),
+      newt ->
       verify_collection_exn var col term
         (if Poly.(Term.seniority_exn newt oldt = 1) then begin
           Log.debugf "%s for variable $%s to %s" b var (Term.to_string newt);
-           Some { bounds = (lb, Some newt); collection = col}
+           Some { bounds = (lb, s, Some newt, s'); collection = col}
          end else el
         )
   )
@@ -323,7 +368,9 @@ let rec solve_map_exn depth bound constrs mtype left right =
   let solve constrs l =
     let (t1, t2), (t1', t2') = SM.find_exn r l, SM.find_exn r' l in
     let constrs =
-      solve_senior_exn (depth + 1) bound constrs t1 t1' in
+      if mtype = RecordMap then
+        solve_senior_exn (depth + 1) bound constrs t1 t1'
+      else solve_senior_exn (depth + 1) bound constrs t1' t1 in
     solve_senior_exn (depth + 1) bound constrs t2 t2' in
   let constrs =
     SS.fold ~init:constrs ~f:solve (SS.inter set set') in
@@ -365,9 +412,12 @@ let rec solve_map_exn depth bound constrs mtype left right =
   Option.value_map ~default:constrs ~f:apply to_var
 
 and solve_senior_exn depth bound constrs left right =
+  let cstr = [left], [right] in
   Log.debugf "%sresolving %s for constraint %s" (String.make depth ' ')
     (if bound = UpperB then "least upper bound" else "greatest lower bound")
-    (Constr.to_string ([left], [right]));
+    (Constr.to_string cstr);
+  let left_is_bool, right_is_bool = Term.is_logic left, Term.is_logic right in
+  if left_is_bool || right_is_bool then add_bool_constr cstr;
   let error t1 t2 =
     unsat_error
       (Printf.sprintf "the seniority relation %s <= %s does not hold"
@@ -406,19 +456,22 @@ and solve_senior_exn depth bound constrs left right =
       if Poly.(bound = UpperB) then
         solve_senior_exn (depth + 1) bound constrs left
           (bounding_term_exn UpperB constrs right)
-      else
+      else if not (Term.contains_logic left) then
         set_bound_exn depth bound constrs t
           (bounding_term_exn UpperB constrs left)
+      else add_logical_bound_exn depth bound constrs t left
     | Var t,
       (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
       if Poly.(bound = LowerB) then
         solve_senior_exn (depth + 1) bound constrs
           (bounding_term_exn UpperB constrs left)
           right
-      else
+      else if not (Term.contains_logic right) then
         set_bound_exn depth
           bound constrs t (bounding_term_exn UpperB constrs right)
-    | Tuple t, Tuple t' when Int.(List.length t = List.length t') ->
+      else add_logical_bound_exn depth bound constrs t right
+    | Tuple t, Tuple t' when Int.(List.length t = List.length t') &&
+        not (left_is_bool) && not (right_is_bool) ->
       List.fold2_exn ~init:constrs ~f:(solve_senior_exn (depth + 1) bound) t t'
     | List (t, v), List (t', v') -> begin
       (* validate the common head of the list and return remaining elements
@@ -513,9 +566,21 @@ and solve_senior_exn depth bound constrs left right =
     | Record (h, v), Nil when Poly.(bound = UpperB) ->
       map_to_nil_exn depth bound constrs h v
     | t, t' ->
-      if Int.(Term.seniority_exn t t' = -1) then error t t'
+      if left_is_bool || right_is_bool then constrs
+      else if Int.(Term.seniority_exn t t' = -1) then error t t'
       else constrs
   with Term.Incomparable_Terms (t1, t2) -> error t1 t2
+(*
+and solve_logic_senior_exn depth bound constrs left right =
+  let open Term in
+  match left, right with
+  | _, Nil -> constrs
+  | Tuple [Symbol "not"; Tuple [Symbol "not"; t]], t' ->
+  | t, Tuple [Symbol "not"; Tuple [Symbol "not"; t']] ->
+    solve_senior_exn depth bound constrs t t'
+  | Tuple [Symbol "not"; t], t' ->
+    if Term.is_logic t 
+*)
 
 let resolve_bound_constraints constrs topo =
   let cstrs = ref constrs in
@@ -538,4 +603,6 @@ let unify_exn g =
   let constrs = set_collection_constrs_exn topo in
   Log.debugf "resolving bound constraints";
   let constrs = resolve_bound_constraints constrs topo in
+  Constr.Set.iter ~f:(fun x -> print_endline (Constr.to_string x))
+    !boolean_constrs;
   constrs

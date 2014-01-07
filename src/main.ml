@@ -28,11 +28,14 @@ let create_dot_output g dot_output =
 
 let print_constraints map =
   let f ~key ~data =
-    let g, t = data.bounds in
-    let print_term = function
-    | None -> "???"
-    | Some t -> Term.to_string t in
-    Printf.printf "%s <= $%s <= %s\n" (print_term g) key (print_term t);
+    let gg, g, gu, u = data.bounds in
+    let print_bound (g, x) =
+      let l = String.Set.elements (String.Set.map ~f:Term.to_string x) in
+      let l = Option.value_map ~default:l
+        ~f:(fun x -> (Term.to_string x) :: l) g in
+      Printf.sprintf "{%s}" (String.concat ~sep:", " l) in
+    Printf.printf "%s <= $%s <= %s\n" (print_bound (gg, g)) key
+      (print_bound (gu, u));
     match data.collection with
     | None -> ()
     | Some (RecordWoLabels x) ->

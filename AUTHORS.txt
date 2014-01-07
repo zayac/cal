@@ -1,0 +1,5 @@
+Authors of cal
+Pavel Zaichenkov <zaichenkov@gmail.com>
+
+Current maintainers of cal
+Pavel Zaichenkov <zaichenkov@gmail.com>
