@@ -38,11 +38,9 @@ val default : t
 (** Convert contraint to syntaxical representation *)
 val to_string : t -> string
 
+val print_vars : var String.Map.t -> unit
+
 (** [vars t] returns two sets of variables from terms of the form [Vars s] in
     the left and right parts of the constraint. *)
 val get_vars : t -> String.Set.t * String.Set.t
 
-(** [external_vars t] returns two sets of variables from terms of the form
-    [Vars s] in the left and right parts of the constraint and are not part of
-    boolean expressions. *)
-val get_external_vars : t -> String.Set.t * String.Set.t

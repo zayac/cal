@@ -33,7 +33,8 @@ let print_constraints map =
       let l = String.Set.elements (String.Set.map ~f:Term.to_string x) in
       let l = Option.value_map ~default:l
         ~f:(fun x -> (Term.to_string x) :: l) g in
-      Printf.sprintf "{%s}" (String.concat ~sep:", " l) in
+      if Poly.(List.length l = 1) then String.concat l
+      else Printf.sprintf "{%s}" (String.concat ~sep:", " l) in
     Printf.printf "%s <= $%s <= %s\n" (print_bound (gg, g)) key
       (print_bound (gu, u));
     match data.collection with
@@ -67,7 +68,7 @@ let loop dot_output debug filename =
   end;
   try
     Log.infof "reading and parsing constraints from %s" filename;
-    let constrs = In_channel.with_file filename
+    let constrs, logic = In_channel.with_file filename
       ~f:(fun inx -> Parser.parse Lexer.read (Lexing.from_channel inx)) in
     Log.infof "%d constraints are parsed" (List.length constrs); 
     Log.infof "constructing a graph from constraints"; 

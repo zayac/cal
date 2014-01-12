@@ -11,4 +11,4 @@ open Core.Std
 
     The same works for a record: [(union { a: t1, b: t2 } {b: t3, c: t4 |
     var})] is converted to [{a: t1, b: (union t2 t3), c: t4 | var}]. *)
-val union : Term.t -> Term.t
+val union : Term.t -> Term.t * Logic.t list

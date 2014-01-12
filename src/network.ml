@@ -29,7 +29,7 @@ end
 module G = Graph.Persistent.Digraph.ConcreteBidirectionalLabeled(Node)(Constr)
 
 let constr_to_edge c =
-  let src, dest = Constr.get_external_vars c in
+  let src, dest = Constr.get_vars c in
   (if String.Set.is_empty src then Env_In else Internal src), c,
     (if String.Set.is_empty dest then Env_Out else Internal dest)
 
@@ -74,7 +74,7 @@ let check_connectivity_exn g =
     (* accumulate all vertices from the left and right parts of the
        neighbouring constraints *)
     let accumulate acc = List.fold_left ~init:acc
-      ~f:(fun acc t -> SS.union acc (Term.get_external_vars t)) in
+      ~f:(fun acc t -> SS.union acc (Term.get_vars t)) in
     let succ_vars = G.fold_succ_e
       (fun (_, (l, _), _) acc -> accumulate acc l) g vnode SS.empty in
     let pred_vars = G.fold_pred_e

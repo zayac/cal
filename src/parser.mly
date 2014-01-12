@@ -1,7 +1,6 @@
 %{
-open Term
 
-let bool_constrs = ref []
+let bool_constrs = ref Logic.Set.empty 
 
 let generate_pairs l =
   let rec apply acc el = function
@@ -15,18 +14,20 @@ let generate_pairs l =
 (* convert a label-term association list into a correct map structure with
    label conflict resolution. New constraints can be added to [bool_constrs]
    list while resolving constraints. *)
-let map_of_alist l =
+let map_of_alist_exn l =
   let open Core.Std in
   let multi_map = String.Map.of_alist_multi l in
-  let rec f (gacc: Term.t list) (vacc: Term.t list) = function
+  let rec f (gacc: Logic.t list) (vacc: Term.t list) = function
   | [] -> failwith "a list must contain at least one element"
   | (g, v) :: [] ->
     if not (List.is_empty gacc) then
       let gacc, vacc = g :: gacc, v :: vacc in
-      let andl = List.map ~f:(fun (x, y) -> and_t x y) (generate_pairs gacc) in
-      let _ = bool_constrs :=
-        (andl, [Nil]) :: ([Nil], andl) :: !bool_constrs in
-      (or_t gacc, or_t (List.map2_exn ~f:and_t gacc vacc))
+      let andl = List.map ~f:(fun (x, y) -> Logic.Or [Logic.Not x; Logic.Not y])
+        (generate_pairs gacc) in
+      let _ = bool_constrs := Logic.Set.union (Logic.Set.of_list andl)
+        !bool_constrs in
+      (Logic.Or gacc, Term.Or (List.map2_exn ~f:(fun g t -> Term.And (g, t))
+        gacc vacc))
     else
       g, v
   | (g, v) :: tl -> f (g :: gacc) (v :: vacc) tl in
@@ -36,62 +37,74 @@ let map_of_alist l =
 %token <int> INT
 %token <string> VAR
 %token <string> ID
-%token NIL
+%token NIL NOT OR AND
 %token LBRACE RBRACE LPAREN RPAREN LBRACKET RBRACKET LSMILE RSMILE
 %token SCOLON COLON COMMA BAR LEQ EOF
 
-%start <Constr.t list> parse
+%start <Constr.t list * Logic.Set.t> parse
 %%
 
 parse:
-  | constrs* EOF { $1 @ !bool_constrs }
+  | constrs* EOF { $1, !bool_constrs }
 
 constrs:
   | term+ LEQ term+ SCOLON { $1, $3 }
   | error
     {
-      let open Errors in
-      parse_error "Invalid constraint" $startpos $endpos }
+      Errors.parse_error "Invalid constraint" $startpos $endpos
+    }
 
 term:
-  | NIL { Nil }
-  | INT { Int $1 }
-  | ID { Symbol $1 }
-  | VAR { Var $1 }
-  | LPAREN term+ RPAREN { Tuple $2 }
+  | NIL { Term.Nil }
+  | INT { Term.Int $1 }
+  | ID { Term.Symbol $1 }
+  | VAR { Term.Var $1 }
+  | LPAREN term+ RPAREN { Term.Tuple $2 }
+  | LPAREN OR nonempty_list(term) RPAREN { Term.Or $3 }
+  | LPAREN AND logical_term term RPAREN { Term.And($3, $4) }
   | LSMILE RSMILE
     {
       let open Core.Std in
-      Choice (String.Map.empty, None)
+      Term.Choice (String.Map.empty, None)
     }
-  | LBRACE RBRACE { Nil }
-  | LBRACKET RBRACKET { Nil }
+  | LBRACE RBRACE { Term.Nil }
+  | LBRACKET RBRACKET { Term.Nil }
   | LSMILE separated_nonempty_list(COMMA, rec_entry) rec_list_tail? RSMILE
     {
-      Choice (map_of_alist $2, $3)
+      Term.Choice (map_of_alist_exn $2, $3)
     }
   | LBRACE separated_nonempty_list(COMMA, rec_entry) rec_list_tail? RBRACE
     {
-      Record (map_of_alist $2, $3)
+      Term.Record (map_of_alist_exn $2, $3)
     }
   | LBRACKET separated_nonempty_list(COMMA, term) rec_list_tail? RBRACKET
-    { List ($2, $3) }
+    { Term.List ($2, $3) }
 
 rec_entry:
-  | ID rec_guard? COLON term
+  | ID guard? COLON term
     {
       let t = match $2 with
-      | None -> Tuple [Symbol "not"; Nil]
+      | None -> Logic.True
       | Some x -> x in
       $1, (t, $4)
     }
   | error
-    { let open Errors in
-      parse_error "Invalid record entry" $startpos $endpos
+    {
+      Errors.parse_error "Invalid record entry" $startpos $endpos
     }
 
-rec_guard:
-  | LPAREN term RPAREN { $2 }
+guard:
+  | LPAREN logical_term RPAREN { $2 }
+  | LPAREN NOT NIL RPAREN { Logic.False }
+  | LPAREN OR nonempty_list(logical_term) RPAREN { Logic.Or $3 }
+  | LPAREN AND logical_term logical_term RPAREN { Logic.And ($3, $4) }
+
+logical_term:
+  | NIL { Logic.True }
+  | VAR { Logic.Var $1 }
+  | LPAREN OR nonempty_list(logical_term) RPAREN { Logic.Or $3 }
+  | LPAREN AND logical_term logical_term RPAREN { Logic.And ($3, $4) }
+  | LPAREN NOT logical_term RPAREN { Logic.Not $3 }
 
 rec_list_tail:
   | BAR VAR { $2 }

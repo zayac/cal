@@ -7,10 +7,10 @@ let unsat_error msg =
   raise (Unsatisfiability_Error (error msg))
 
 (* all boolean constraints are put here in order to be resolved later *)
-let boolean_constrs = ref Constr.Set.empty
+let boolean_constrs = ref Logic.Set.empty
 
 (* a shorthand to add a new boolean constraint *)
-let add_bool_constr t = boolean_constrs := Constr.Set.add !boolean_constrs t
+let add_bool_constr t = boolean_constrs := Logic.Set.add !boolean_constrs t
 
 let add_list_cstr_exn cstrs key =
   let open Constr in
@@ -59,7 +59,7 @@ let add_choice_cstr_exn cstrs key labels =
   Log.debugf "variable %s must be a choice without labels {%s}" key
     (String.concat ~sep:", " (String.Set.to_list labels));
   String.Map.change cstrs key (function
-    | None -> Some {
+      | None -> Some {
         bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
         collection = Some (ChoiceWoLabels labels) }
     | Some { bounds; collection } ->
@@ -89,8 +89,8 @@ let rec resolve_collections_exn constrs = function
           | Some x -> f constrs x labels
         )
         ~f:(fun ~key ~data acc ->
-              let g, t = data in
-              resolve_collections_exn (resolve_collections_exn acc [g]) [t]
+              let _, t = data in
+              resolve_collections_exn acc [t]
         )
         map in
     let constrs' = match hd with
@@ -104,11 +104,15 @@ let rec resolve_collections_exn constrs = function
         )
         ~f:(fun acc x -> resolve_collections_exn acc [x])
         l
+    | Or x
     | Tuple x ->
       List.fold_left ~init:constrs
         ~f:(fun acc x -> resolve_collections_exn acc [x]) x
+    | And (_, x) -> resolve_collections_exn constrs [x]
     | Nil | Int _ | Symbol _ | Var _ -> constrs in
     resolve_collections_exn constrs' tl
+
+
 
 (* resolve constraints on labels and collection types given the constraint
    schedule *)
@@ -180,8 +184,7 @@ let get_bound_exn bound constrs x =
 let rec bounding_map_exn bound constrs mtype x tl =
   let module SM = String.Map in
   let f ~key ~data:(g, t) map =
-    SM.add map ~key ~data:(bounding_term_exn bound constrs g,
-      bounding_term_exn bound constrs t) in
+    SM.add map ~key ~data:(g, bounding_term_exn bound constrs t) in
   let map = SM.fold ~init:SM.empty ~f x in
   let map = match tl with
   | None -> map
@@ -200,7 +203,9 @@ and  bounding_term_exn bound constrs term =
   | t when Poly.(Term.is_nil t = Some true) -> Nil
   | Nil | Int _ | Symbol _ -> term
   | Var x -> get_bound_exn bound constrs x
+  | Or x -> Or (List.map ~f:(bounding_term_exn bound constrs) x)
   | Tuple x -> Tuple (List.map ~f:(bounding_term_exn bound constrs) x)
+  | And (b, x) -> And (b, bounding_term_exn bound constrs x)
   | List (x, tail) ->
     let tl = match tail with
     | None -> []
@@ -263,7 +268,7 @@ let set_bound_exn depth bound constrs var term =
     | List _ -> add_list_cstr_exn constrs var
     | Record _ -> add_record_cstr_exn constrs var SS.empty
     | Choice _ -> add_choice_cstr_exn constrs var SS.empty
-    | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs in
+    | Nil | Int _ | Symbol _ | Tuple _ | Var _ | And _ | Or _ -> constrs in
   (* satisfy collection constraints *)
   let open Constr in
   let term = match SM.find constrs var with
@@ -342,11 +347,15 @@ let map_to_nil_exn depth bound constrs h v =
   | Var t, Var t' ->
     let constrs = set_bound_exn depth bound constrs t Nil in
     set_bound_exn depth bound constrs t' Nil
-  | Var t, (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _)
-  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _), Var t ->
+  | Var t, (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ |
+      And _ | Or _)
+  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ | And _ |
+      Or _), Var t ->
     set_bound_exn depth bound constrs t Nil
-  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
-    (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
+  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ | And _ |
+      Or _ ),
+    (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ | And _ |
+      Or _ ) ->
     constrs in
   let constrs = match v with
   | None -> constrs
@@ -366,12 +375,12 @@ let rec solve_map_exn depth bound constrs mtype left right =
      and c will be removed. *)
   let set, set' = SS.of_list (SM.keys r), SS.of_list (SM.keys r') in
   let solve constrs l =
-    let (t1, t2), (t1', t2') = SM.find_exn r l, SM.find_exn r' l in
-    let constrs =
-      if mtype = RecordMap then
-        solve_senior_exn (depth + 1) bound constrs t1 t1'
-      else solve_senior_exn (depth + 1) bound constrs t1' t1 in
-    solve_senior_exn (depth + 1) bound constrs t2 t2' in
+    let (g, t), (g', t') = SM.find_exn r l, SM.find_exn r' l in
+    if mtype = RecordMap then
+      add_bool_constr (Logic.Or [Logic.Not g'; g])
+    else
+      add_bool_constr (Logic.Or [Logic.Not g; g']);
+    solve_senior_exn (depth + 1) bound constrs t t' in
   let constrs =
     SS.fold ~init:constrs ~f:solve (SS.inter set set') in
   let set, set' = SS.diff set set', SS.diff set' set in
@@ -390,9 +399,8 @@ let rec solve_map_exn depth bound constrs mtype left right =
   let apply to_var =
     let tail_map = SM.empty in
     let set_tail_var tail_map l =
-      let (t1, t2) = SM.find_exn from_map l in
-      SM.add tail_map l (bounding_term_exn UpperB constrs t1,
-        bounding_term_exn UpperB constrs t2) in
+      let (g, t) = SM.find_exn from_map l in
+      SM.add tail_map l (g, bounding_term_exn UpperB constrs t) in
     let tail_map = SS.fold ~init:tail_map ~f:set_tail_var from_set in
     (* The content of one variable is copied to another. *)
     let apply' from_var =
@@ -416,14 +424,15 @@ and solve_senior_exn depth bound constrs left right =
   Log.debugf "%sresolving %s for constraint %s" (String.make depth ' ')
     (if bound = UpperB then "least upper bound" else "greatest lower bound")
     (Constr.to_string cstr);
-  let left_is_bool, right_is_bool = Term.is_logic left, Term.is_logic right in
-  if left_is_bool || right_is_bool then add_bool_constr cstr;
   let error t1 t2 =
     unsat_error
       (Printf.sprintf "the seniority relation %s <= %s does not hold"
         (Term.to_string t1)
         (Term.to_string t2)) in
-  let left, right = Equations.union left, Equations.union right in
+  let (left, bool_cstr) = Equations.union left in
+  List.iter ~f:add_bool_constr bool_cstr;
+  let (right, bool_cstr) = Equations.union right in
+  List.iter ~f:add_bool_constr bool_cstr;
   try
     let open Term in
     match left, right with
@@ -456,22 +465,27 @@ and solve_senior_exn depth bound constrs left right =
       if Poly.(bound = UpperB) then
         solve_senior_exn (depth + 1) bound constrs left
           (bounding_term_exn UpperB constrs right)
-      else if not (Term.contains_logic left) then
+      else
         set_bound_exn depth bound constrs t
           (bounding_term_exn UpperB constrs left)
-      else add_logical_bound_exn depth bound constrs t left
+    | (Or _ | And _), Var t ->
+      if Poly.(bound = LowerB) then
+        add_logical_bound_exn depth bound constrs t left
+      else constrs
     | Var t,
       (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
       if Poly.(bound = LowerB) then
         solve_senior_exn (depth + 1) bound constrs
           (bounding_term_exn UpperB constrs left)
           right
-      else if not (Term.contains_logic right) then
+      else
         set_bound_exn depth
           bound constrs t (bounding_term_exn UpperB constrs right)
-      else add_logical_bound_exn depth bound constrs t right
-    | Tuple t, Tuple t' when Int.(List.length t = List.length t') &&
-        not (left_is_bool) && not (right_is_bool) ->
+    | Var t, (Or _ | And _) ->
+      if Poly.(bound = UpperB) then
+        add_logical_bound_exn depth bound constrs t right
+      else constrs
+    | Tuple t, Tuple t' when Int.(List.length t = List.length t') ->
       List.fold2_exn ~init:constrs ~f:(solve_senior_exn (depth + 1) bound) t t'
     | List (t, v), List (t', v') -> begin
       (* validate the common head of the list and return remaining elements
@@ -503,7 +517,8 @@ and solve_senior_exn depth bound constrs left right =
           let set_ground cstrs var =
             match var with
             | Var v -> set_bound_exn depth bound cstrs v Nil
-            | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
+            | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _
+            | Or _ | And _ ->
               cstrs in
           List.fold_left ~init:constrs ~f:set_ground rem2
         else constrs in
@@ -524,8 +539,8 @@ and solve_senior_exn depth bound constrs left right =
       if Poly.(bound = UpperB) then
         let verify constrs = function
         | Var t -> set_bound_exn depth bound constrs t Nil
-        | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _
-        | Choice _ -> constrs in
+        | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _
+        | Or _ | And _ -> constrs in
         let constrs = match v with
           | None -> constrs
           | Some x -> set_bound_exn depth bound constrs x Nil in
@@ -542,7 +557,8 @@ and solve_senior_exn depth bound constrs left right =
         | Var t -> set_bound_exn depth bound constrs t Nil
         | Nil -> constrs
         | t when Poly.(Term.is_nil t = Some true) -> constrs
-        | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
+        | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _
+        | Or _ | And _ ->
           unsat_error (Printf.sprintf "list %s is not nil"
             (Term.to_string right)
           ) in
@@ -558,15 +574,19 @@ and solve_senior_exn depth bound constrs left right =
     | Choice _, Choice _ ->
       solve_map_exn depth bound constrs ChoiceMap left right
     | Nil, Choice (h, v) when Poly.(bound = LowerB) ->
-      map_to_nil_exn depth bound constrs h v
+      constrs
+(*       map_to_nil_exn depth bound constrs h v *)
     | Nil, Record (h, v) when Poly.(bound = LowerB) ->
-      map_to_nil_exn depth bound constrs h v
+      constrs
+(*       map_to_nil_exn depth bound constrs h v *)
     | Choice (h, v), Nil when Poly.(bound = UpperB) ->
-      map_to_nil_exn depth bound constrs h v
+      constrs
+(*       map_to_nil_exn depth bound constrs h v *)
     | Record (h, v), Nil when Poly.(bound = UpperB) ->
-      map_to_nil_exn depth bound constrs h v
+      constrs
+(*       map_to_nil_exn depth bound constrs h v *)
     | t, t' ->
-      if left_is_bool || right_is_bool then constrs
+      if Term.contains_logic left || Term.contains_logic right then constrs
       else if Int.(Term.seniority_exn t t' = -1) then error t t'
       else constrs
   with Term.Incomparable_Terms (t1, t2) -> error t1 t2
@@ -579,7 +599,7 @@ and solve_logic_senior_exn depth bound constrs left right =
   | t, Tuple [Symbol "not"; Tuple [Symbol "not"; t']] ->
     solve_senior_exn depth bound constrs t t'
   | Tuple [Symbol "not"; t], t' ->
-    if Term.is_logic t 
+    if Term.is_logic t
 *)
 
 let resolve_bound_constraints constrs topo =
@@ -603,6 +623,6 @@ let unify_exn g =
   let constrs = set_collection_constrs_exn topo in
   Log.debugf "resolving bound constraints";
   let constrs = resolve_bound_constraints constrs topo in
-  Constr.Set.iter ~f:(fun x -> print_endline (Constr.to_string x))
+  Set.iter ~f:(fun x -> print_endline (Logic.to_string x))
     !boolean_constrs;
   constrs
