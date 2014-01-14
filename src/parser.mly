@@ -26,8 +26,8 @@ let map_of_alist_exn l =
         (generate_pairs gacc) in
       let _ = bool_constrs := Logic.Set.union (Logic.Set.of_list andl)
         !bool_constrs in
-      (Logic.Or gacc, Term.Or (List.map2_exn ~f:(fun g t -> Term.And (g, t))
-        gacc vacc))
+      (Logic.Or gacc, Term.Nil (*Term.Or (List.map2_exn ~f:(fun g t -> Term.And (g, t))
+        gacc vacc)) *) )
     else
       g, v
   | (g, v) :: tl -> f (g :: gacc) (v :: vacc) tl in
@@ -39,7 +39,7 @@ let map_of_alist_exn l =
 %token <string> ID
 %token NIL NOT OR AND
 %token LBRACE RBRACE LPAREN RPAREN LBRACKET RBRACKET LSMILE RSMILE
-%token SCOLON COLON COMMA BAR LEQ EOF
+%token SCOLON COLON COMMA BAR LEQ EQ EOF
 
 %start <Constr.t list * Logic.Set.t> parse
 %%
@@ -49,6 +49,7 @@ parse:
 
 constrs:
   | term+ LEQ term+ SCOLON { $1, $3 }
+  | term+ EQ term+ SCOLON { ($3 @ $1), ($3 @ $1) }
   | error
     {
       Errors.parse_error "Invalid constraint" $startpos $endpos
@@ -60,8 +61,6 @@ term:
   | ID { Term.Symbol $1 }
   | VAR { Term.Var $1 }
   | LPAREN term+ RPAREN { Term.Tuple $2 }
-  | LPAREN OR nonempty_list(term) RPAREN { Term.Or $3 }
-  | LPAREN AND logical_term term RPAREN { Term.And($3, $4) }
   | LSMILE RSMILE
     {
       let open Core.Std in

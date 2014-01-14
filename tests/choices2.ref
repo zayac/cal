@@ -2,3 +2,6 @@
 $x is a choice without labels {a, b, d}
 (:y: (:zzz: 5000:):) <= $z <= (:y: (:zzz: 5000:):)
 $z is a choice without labels {c, d, q, x}
+
+Boolean constraints:
+(or (not (not nil)) (not nil))

@@ -10,13 +10,11 @@ module T = struct
     | Record of (Logic.t * t) String.Map.t * string option
     | Choice of (Logic.t * t) String.Map.t * string option
     | Var of string
-    | And of Logic.t * t
-    | Or of t list
   with sexp, compare
 end
 include T
 include Comparable.Make(T)
-exception Non_Ground_or_Logic of t with sexp
+exception Non_Ground of t with sexp
 
 exception Incomparable_Terms of t * t with sexp
 
@@ -48,10 +46,6 @@ let rec to_string t =
   | Record (x, tail) -> print_dict x tail "{" "}"
   | Choice (x, tail) -> print_dict x tail "(:" ":)"
   | Var x -> "$" ^ x
-  | And (b, t) ->
-    Printf.sprintf "(and %s %s)" (Logic.to_string b) (to_string t)
-  | Or x ->
-    Printf.sprintf "(or %s)" (String.concat ~sep:" " (L.map ~f:to_string x))
 
 let rec get_vars t =
   let module SS = String.Set in
@@ -59,8 +53,6 @@ let rec get_vars t =
   let module L = List in
   match t with
   | Var v -> String.Set.singleton v
-  | And (_, t) -> get_vars t
-  | Or x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_vars x)
   | Nil | Int _ | Symbol _ -> SS.empty
   | Tuple x -> L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_vars x)
   | List (x, tail) ->
@@ -89,12 +81,6 @@ let rec is_nil = function
   | List (_, Some _)
   | Record (_, Some _) -> None
   | Int _ | Symbol _ | Tuple _ | Choice (_, _) -> Some false
-  | And (_, t) ->
-    if Option.value ~default:false (is_nil t) then Some true else None
-  | Or t ->
-    if List.for_all ~f:(fun x -> Option.value ~default:false (is_nil x)) t then
-      Some true
-    else None
 
 let rec is_nil_exn t =
   try
@@ -104,15 +90,12 @@ let rec is_nil_exn t =
     | Record (x, None) as t ->
       if String.Map.is_empty x then true
       else if String.Set.is_empty (get_vars t) then false
-      else raise (Non_Ground_or_Logic t)
+      else raise (Non_Ground t)
     | Var _
     | List (_, Some _)
-    | Record (_, Some _) -> raise (Non_Ground_or_Logic t)
+    | Record (_, Some _) -> raise (Non_Ground t)
     | Int _ | Symbol _ | Tuple _ | Choice (_, _)  -> false
-    | And (_, t) -> if is_nil_exn t then true else raise (Non_Ground_or_Logic t)
-    | Or x -> if List.for_all ~f:is_nil_exn x then true else
-        raise (Non_Ground_or_Logic t)
-  with Non_Ground_or_Logic _ -> raise (Non_Ground_or_Logic t)
+  with Non_Ground _ -> raise (Non_Ground t)
 
 let canonize t =
   let rec trim_list_rev = function
@@ -132,8 +115,6 @@ let rec is_ground = function
   | Record (x, None)
   | Choice (x, None) ->
     String.Map.for_all ~f:(fun (g, t) -> Logic.is_ground g && is_ground t) x
-  | And (b, t) -> Logic.is_ground b && is_ground t
-  | Or tl -> List.for_all ~f:is_ground tl
   | Choice (_, _)
   | Record (_, _)
   | List (_, _)
@@ -173,11 +154,11 @@ let rec seniority_exn t1 t2 =
     | Choice (x', None), Choice (x, None) -> seniority_maps_exn x x'
     | _ -> raise (Incomparable_Terms (t1, t2))
   with Incomparable_Terms _
-     | Non_Ground_or_Logic _ ->
+     | Non_Ground _ ->
      raise (Incomparable_Terms (t1, t2))
 
 (* [seniority_mapes exn x x'] resolves the seniority relation for two 'map'
-    terms, where [x] and [x'] has types [(term * term) String.Map] each.
+    terms, where [x] and [x'] has types [(logic * term) String.Map] each.
     Basically, this is a seniority relation resolution for record and choice
     terms. *)
 and seniority_maps_exn x x' =
@@ -203,19 +184,3 @@ and seniority_maps_exn x x' =
   else if more then 1
   else 0
 
-let rec contains_logic t =
-  let module SM = String.Map in
-  let module L = List in
-  match t with
-  | Nil | Int _ | Symbol _ | Var _ -> false
-  | And _ | Or _ -> true
-  | Tuple x ->
-    L.fold_left ~init:false ~f:(fun acc v -> acc || (contains_logic v)) x
-  | List (x, _) ->
-    L.fold_left ~init:false ~f:(fun acc v -> acc || (contains_logic v)) x
-  | Record (map, _)
-  | Choice (map, _) ->
-    SM.fold ~init:false
-      ~f:(fun ~key ~data acc ->
-          let g, t = data in
-          acc || Logic.(g <> True) || (contains_logic t)) map

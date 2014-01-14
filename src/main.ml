@@ -22,7 +22,7 @@ module Dot = Graph.Graphviz.Dot(struct
   end)
 
 let create_dot_output g dot_output =
-  Log.infof "outputting the network graph in dot format to %s" dot_output; 
+  Log.infof "outputting the network graph in dot format to %s" dot_output;
   Out_channel.with_file dot_output
     ~f:(fun oc -> Dot.output_graph oc g)
 
@@ -54,11 +54,11 @@ let print_constraints map =
     | Some ListCol -> Printf.printf "$%s is a list\n" key in
   String.Map.iter ~f map
 
-(* let print_bool_constraints l =
-  print_string "\nThe following boolean expressions must be satisfiable:\n";
-  let f x = print_endline (Term.to_string x) in
-  List.iter ~f l
-*)
+let print_bool_constraints l =
+  print_string "\nBoolean constraints:\n";
+  let f x = print_endline (Logic.to_string x) in
+  Logic.Set.iter ~f l
+
 
 let loop dot_output debug filename =
   Location.filename := filename;
@@ -70,16 +70,16 @@ let loop dot_output debug filename =
     Log.infof "reading and parsing constraints from %s" filename;
     let constrs, logic = In_channel.with_file filename
       ~f:(fun inx -> Parser.parse Lexer.read (Lexing.from_channel inx)) in
-    Log.infof "%d constraints are parsed" (List.length constrs); 
-    Log.infof "constructing a graph from constraints"; 
+    Log.infof "%d constraints are parsed" (List.length constrs);
+    Log.infof "constructing a graph from constraints";
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
-    Log.infof "unifying constraints represented as the graph"; 
-    let bounds = Solver.unify_exn g in
+    Log.infof "unifying constraints represented as the graph";
+    let bounds, logic = Solver.unify_exn g in
     let _ = print_constraints bounds in
-(*    if not (List.is_empty bool_constrs) then
-      print_bool_constraints bool_constrs *)
-    ()
+    if not (Logic.Set.is_empty logic) then
+      print_bool_constraints logic
+    else ()
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg
      | Network.Topology_Error msg

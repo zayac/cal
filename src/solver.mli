@@ -4,6 +4,6 @@ open Core.Std
     constraints. *)
 exception Unsatisfiability_Error of string
 
-(** A unification procedure that finally returns unified constraints on
-    variables. *)
-val unify_exn : Network.G.t -> Constr.var String.Map.t
+(** A unification procedure that finally returns unified variable constraints
+    as well as logical constraints that need to be unified. *)
+val unify_exn : Network.G.t -> Constr.var String.Map.t * Logic.Set.t

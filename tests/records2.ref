@@ -3,3 +3,6 @@ $x is a record without labels {a, b, d}
 10 <= $y <= nil
 {y: 45} <= $z <= nil
 $z is a record without labels {c, d, q, x}
+
+Boolean constraints:
+(or (not (not nil)) (not nil))

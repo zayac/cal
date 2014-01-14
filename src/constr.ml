@@ -1,7 +1,7 @@
 open Core.Std
 
 module T = struct
-  type t = Term.t list * Term.t list with sexp, compare 
+  type t = Term.t list * Term.t list with sexp, compare
 end
 include T
 include Comparable.Make(T)
@@ -29,17 +29,21 @@ let to_string (l, r) =
 
 let print_vars constrs =
   String.Map.iter ~f:(fun ~key ~data ->
-    Printf.printf "Constraints for variable %s:\n" key; 
+    Printf.printf "Constraints for variable %s:\n" key;
     let ground1, set1, ground2, set2 = data.bounds in
     Printf.printf"\tbounds: (%s, {%s}, %s, {%s})\n\tcollection: %s\n"
       (Option.value_map ~default:"none" ~f:Term.to_string ground1)
-      (String.concat ~sep:", " (List.map ~f:Term.to_string (Term.Set.to_list set1)))
+      (String.concat ~sep:", "
+        (List.map ~f:Term.to_string (Term.Set.to_list set1)))
       (Option.value_map ~default:"none" ~f:Term.to_string ground1)
-      (String.concat ~sep:", " (List.map ~f:Term.to_string (Term.Set.to_list set1)))
-      (match data.collection with 
+      (String.concat ~sep:", "
+        (List.map ~f:Term.to_string (Term.Set.to_list set1)))
+      (match data.collection with
       | None -> "none"
-      | Some (RecordWoLabels s) -> "record without " ^ (String.concat ~sep:", " (String.Set.to_list s))
-      | Some (ChoiceWoLabels s) -> "choice without " ^ (String.concat ~sep:", " (String.Set.to_list s))
+      | Some (RecordWoLabels s) ->
+        "record without " ^ (String.concat ~sep:", " (String.Set.to_list s))
+      | Some (ChoiceWoLabels s) ->
+        "choice without " ^ (String.concat ~sep:", " (String.Set.to_list s))
       | Some ListCol -> "list")) constrs
 
 let get_vars (l, r) =

@@ -46,6 +46,7 @@ rule read = parse
   | ','      { COMMA }
   | '|'      { BAR }
   | "<="     { LEQ }
+  | '='      { EQ }
   | id as i  { ID i }
   | var as i {
                let open Core.Std in

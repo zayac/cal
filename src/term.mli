@@ -10,8 +10,6 @@ type t =
   | Record of (Logic.t * t) String.Map.t * string option
   | Choice of (Logic.t * t) String.Map.t * string option
   | Var of string
-  | And of Logic.t * t
-  | Or of t list
 
 val compare_t : t -> t -> int
 val t_of_sexp : Sexplib.Sexp.t -> t
@@ -30,10 +28,9 @@ val hash : t -> int
 (** Convert term to syntaxical representation *)
 val to_string : t -> string
 
-(** This exception must be raised when non-ground term or
-    a logic term, which is not identically nil, is provided as an argument for
-    [is_nil_exn] function. *)
-exception Non_Ground_or_Logic of t with sexp
+(** This exception must be raised when non-ground term is provided as an
+    argument for [is_nil_exn] function. *)
+exception Non_Ground of t with sexp
 
 (** [is_nil t] returns [true] only if a term [t] is ground and equals to
     [Nil] in the canonical form.
@@ -59,7 +56,3 @@ val seniority_exn : t -> t -> int
 (** [get_vars t] returns a set of variable strings [s] from terms
     of the form [Var s] that are contained in [t] *)
 val get_vars : t -> String.Set.t
-
-(** checks either a term contains some logical expression inside (or is a
-    logical expression itself) *)
- val contains_logic : t -> bool

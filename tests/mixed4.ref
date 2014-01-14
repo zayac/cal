@@ -8,3 +8,6 @@ $d is a choice without labels {c}
 $l is a list
 (:a: 10, c: t:) <= $x <= (:a: nil, aa: 10, c: t:)
 $x is a choice without labels {b}
+
+Boolean constraints:
+(or (not (not nil)) (not nil))

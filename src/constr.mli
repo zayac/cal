@@ -38,6 +38,7 @@ val default : t
 (** Convert contraint to syntaxical representation *)
 val to_string : t -> string
 
+(** print a set of constraints on variables *)
 val print_vars : var String.Map.t -> unit
 
 (** [vars t] returns two sets of variables from terms of the form [Vars s] in
