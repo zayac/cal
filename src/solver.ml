@@ -6,589 +6,303 @@ let unsat_error msg =
   let open Errors in
   raise (Unsatisfiability_Error (error msg))
 
-(* all boolean constraints are put here in order to be resolved later *)
-let boolean_constrs = ref Logic.Set.empty
 
-(* a shorthand to add a new boolean constraint *)
-let add_bool_constr t = boolean_constrs := Logic.Set.add !boolean_constrs t
+type context = Constr.var String.Map.t * Logic.Set.t
 
-let add_list_cstr_exn cstrs key =
+let add_list_constr constrs guard key =
   let open Constr in
-  Log.debugf "variable %s must be a list" key;
-  String.Map.change cstrs key (function
-    | None ->
-      Some {
-        bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
-        collection = Some ListCol
-        }
-    | Some { bounds; collection } ->
-      match collection with
-      | Some (RecordWoLabels _) -> unsat_error
-        (Printf.sprintf "Variable $%s can't be classified as list and \
-          record at the same time" key)
-      | Some (ChoiceWoLabels _) -> unsat_error
-        (Printf.sprintf "Variable $%s can't be classified as list and \
-          choice at the same time" key)
-      | Some ListCol | None -> Some { bounds; collection = Some ListCol }
-    )
+  String.Map.change constrs key (function
+  (* empty case *)
+  | None -> Some {
+      bounds = (Term.Map.empty, Term.Map.empty);
+      typ = { record = None; choice = None; lst = Some guard }
+    }
+  (* error cases *)
+  | Some { bounds; typ = { record = Some (Logic.True, _); choice; lst } } ->
+    unsat_error (Printf.sprintf "Variable $%s can't be classified as both a 
+      record and a list" key)
+  | Some { bounds; typ = { choice = Some (Logic.True, _); record; lst } } ->
+    unsat_error (Printf.sprintf "Variable $%s can't be classified as both a 
+      record and a list" key)
+  (* constraint for an existing list constraint *)
+  | Some { bounds; typ = { record; choice; lst = Some b; }} ->
+    let guard' =
+      if Logic.(b = True || guard = True || guard = b) then guard
+      else Logic.And (b, guard) in
+    Some { bounds; typ = { record; choice; lst = Some guard' } }
+  | Some { bounds; typ = { record; choice; lst = None } } ->
+    Some { bounds; typ = { record; choice; lst = Some guard } })
 
-let add_record_cstr_exn cstrs key labels =
+let add_label_constr constrs key map guard col_typ =
+  let labels = String.Map.map ~f:(fun (g, _) -> g) map in
   let open Constr in
-  Log.debugf "variable %s must be a record without labels {%s}" key
-    (String.concat ~sep:", " (String.Set.to_list labels));
-  String.Map.change cstrs key (function
-    | None -> Some {
-        bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
-        collection = Some (RecordWoLabels labels)
-      }
-    | Some { bounds; collection } ->
-      match collection with
-      | Some ListCol -> unsat_error
-        (Printf.sprintf "Variable $%s can't be classified as record and \
-          list at the same time" key)
-      | Some (ChoiceWoLabels _) -> unsat_error
-        (Printf.sprintf "Variable $%s can't be classified as record and \
-          choice at the same time" key)
-      | Some (RecordWoLabels x) -> Some { bounds;
-        collection = Some (RecordWoLabels (String.Set.union x labels)) }
-      | None -> Some { bounds; collection = Some (RecordWoLabels labels) }
-    )
+  String.Map.change constrs key (function
+  (* empty case *)
+  | None -> Some {
+      bounds = (Term.Map.empty, Term.Map.empty);
+      typ =
+        match col_typ with
+        | `Choice ->
+          { record = None; choice = Some (guard, labels); lst = None; }
+        | `Record ->
+          { record = Some (guard, labels); choice = None; lst = None; }
+    }
+  | Some { bounds; typ } ->
+    match col_typ, typ with
+    (* error cases *)
+    | `Record, { choice = Some (Logic.True, _); _ }
+    | `Choice, { record = Some (Logic.True, _); _ } ->
+      unsat_error (Printf.sprintf "Variable $%s can't be classified as both a 
+        record and a choice" key)
+    | `Choice, { lst = Some Logic.True; _ } ->
+      unsat_error (Printf.sprintf "Variable $%s can't be classified as both a 
+        list and a choice" key)
+    | `Record, { lst = Some Logic.True; _ } ->
+      unsat_error (Printf.sprintf "Variable $%s can't be classified as both a 
+        list and a record" key)
+    (* add to existing constraints *)
+    | `Choice, { choice = Some (b, lm); record; lst; } ->
+      let guard' =
+        if Logic.(b = True || guard = True || guard = b) then guard
+        else Logic.And (b, guard) in
+      Some { bounds; typ =
+        { record; lst; choice = Some (guard',
+        String.Map.merge labels lm ~f:(fun ~key -> function
+          | `Both (l1, l2) -> Some (Logic.And (l1, l2))
+          | `Left l | `Right l -> Some l)); }; }
+    | `Record, { record = Some (b, lm); choice; lst; } ->
+      let guard' =
+        if Logic.(b = True || guard = True || b = guard) then guard
+        else Logic.And (b, guard) in
+      Some { bounds; typ =
+        { choice; lst; record = Some (guard',
+        String.Map.merge labels lm ~f:(fun ~key -> function
+          | `Both (l1, l2) -> Some (Logic.And (l1, l2))
+          | `Left l | `Right l -> Some l)); }; }
+    | `Record, { record = None; lst; choice; } ->
+      Some { bounds; typ =
+        { record = Some (guard, labels); choice; lst; }}
+    | `Choice, { choice = None; lst; record; } ->
+      Some { bounds; typ =
+        { choice = Some (guard, labels); record; lst; }})
 
-let add_choice_cstr_exn cstrs key labels =
-  let open Constr in
-  Log.debugf "variable %s must be a choice without labels {%s}" key
-    (String.concat ~sep:", " (String.Set.to_list labels));
-  String.Map.change cstrs key (function
-      | None -> Some {
-        bounds = (None, Term.Set.empty, Some Term.Nil, Term.Set.empty);
-        collection = Some (ChoiceWoLabels labels) }
-    | Some { bounds; collection } ->
-      match collection with
-      | Some ListCol -> unsat_error
-        (Printf.sprintf "Variable $%s can't be classified as choice and \
-          list at the same time" key)
-      | Some (RecordWoLabels _) -> unsat_error
-        (Printf.sprintf "Variable $%s can't be classified as choice and \
-          Record at the same time" key)
-      | Some (ChoiceWoLabels x) -> Some { bounds;
-        collection = Some (ChoiceWoLabels (String.Set.union x labels)) }
-      | None -> Some { bounds; collection = Some (ChoiceWoLabels labels) }
-    )
-
-(* resolve constraints for labels and collection types *)
-let rec resolve_collections_exn constrs = function
+let rec resolve_collections_exn constrs guard = function
   | [] -> constrs
   | hd :: tl ->
+    let fold_map constrs map = String.Map.fold ~init:constrs
+      ~f:(fun ~key ~data acc ->
+        let (g, t) = data in
+        if Logic.(g = False) then acc
+        else if Logic.(g = True) then resolve_collections_exn acc guard [t]
+        else if Logic.(guard = True || guard = g) then
+          resolve_collections_exn acc g [t]
+        else
+          resolve_collections_exn acc (Logic.And (guard, g)) [t]
+        ) map in
     let open Term in
-    let module SM = String.Map in
-    let set f map var =
-      let labels = String.Set.of_list (SM.keys map) in
-      SM.fold
-        ~init:(match var with
-          | None -> constrs
-          | Some x -> f constrs x labels
-        )
-        ~f:(fun ~key ~data acc ->
-              let _, t = data in
-              resolve_collections_exn acc [t]
-        )
-        map in
     let constrs' = match hd with
-    | Choice (map, v) -> set add_choice_cstr_exn map v
-    | Record (map, v) -> set add_record_cstr_exn map v
+    | Nil | Int _ | Symbol _ | Var _ -> constrs
+    | Tuple x -> resolve_collections_exn constrs guard x
+    | Switch tl ->
+      Logic.Map.fold ~init:constrs
+        ~f:(fun ~key ~data acc ->
+          if Logic.(guard = True || guard = key) then
+            resolve_collections_exn acc key [data]
+          else
+            resolve_collections_exn acc (Logic.And (guard, key))  [data]
+        ) tl
+    | Choice (map, v) ->
+      let constrs =
+        match v with
+        | Some v -> add_label_constr constrs v map guard `Choice
+        | None -> constrs in
+      fold_map constrs map
+    | Record (map, v) ->
+      let constrs =
+        match v with
+        | Some v -> add_label_constr constrs v map guard `Record
+        | None -> constrs in
+      fold_map constrs map
     | List (l, v) ->
-      List.fold_left
-        ~init:(match v with
-          | None -> constrs
-          | Some x -> add_list_cstr_exn constrs x
-        )
-        ~f:(fun acc x -> resolve_collections_exn acc [x])
-        l
-    | Tuple x ->
-      List.fold_left ~init:constrs
-        ~f:(fun acc x -> resolve_collections_exn acc [x]) x
-    | Nil | Int _ | Symbol _ | Var _ -> constrs in
-    resolve_collections_exn constrs' tl
+      let constrs =
+        match v with
+        | Some v -> add_list_constr constrs guard v
+        | None -> constrs in
+      resolve_collections_exn constrs guard l in
+    resolve_collections_exn constrs' guard tl
 
-(* resolve constraints on labels and collection types given the constraint
-   schedule *)
-let set_collection_constrs_exn constrs =
+let set_collection_constrs_exn topo =
   let terms = List.fold ~init:[]
-    ~f:(fun acc (left, right) -> acc @ left @ right) constrs in
-  resolve_collections_exn String.Map.empty terms
-
-let get_list_term_exn =
-  let open Term in
-  function
-  | List (x, _) -> x
-  | Nil -> []
-  | _ -> invalid_arg "list as a term is expected"
-
-let get_record_term_exn =
-  let open Term in
-  function
-  | Record (x, _) -> x
-  | Nil -> String.Map.empty
-  | _ -> invalid_arg "record as a term is expected"
-
-let get_choice_term_exn =
-  let open Term in
-  function
-  | Choice (x, _) -> x
-  | Nil -> String.Map.empty
-  | _ -> invalid_arg "record as a term is expected"
-
-let unwrap_record_exn =
-  let open Term in
-  function
-  | Record (h, v) -> h, v
-  | Nil -> String.Map.empty, None
-  | _ -> invalid_arg "record as a term is expected"
-
-let unwrap_choice_exn =
-  let open Term in
-  function
-  | Choice (h, v) -> h, v
-  | Nil -> String.Map.empty, None
-  | _ -> invalid_arg "record as a term is expected"
-
-type bound =
-  | UpperB
-  | LowerB
-
-type map_type =
-  | RecordMap
-  | ChoiceMap
+    ~f:(fun acc (left, right) -> acc @ left @ right) topo in
+  resolve_collections_exn String.Map.empty Logic.True terms
 
 let get_bound_exn bound constrs x =
   let cstr = String.Map.find_exn constrs x in
   let open Constr in
-  let low, _, up, _ = cstr.bounds in
-  if Poly.(bound = LowerB) then
-    match low with
-    | None -> invalid_arg
-      (Printf.sprintf "lower bound for variable $%s does not exist" x)
-    | Some t -> t
-  else
-    begin
-    match up with
-    | None -> invalid_arg
-      (Printf.sprintf "upper bound for variable $%s does not exist" x)
-    | Some t -> t
-  end
+  let low, up = cstr.bounds in
+  if Poly.(bound = `Lower) then low else up
 
-let rec bounding_map_exn bound constrs mtype x tl =
-  let module SM = String.Map in
-  let f ~key ~data:(g, t) map =
-    SM.add map ~key ~data:(g, bounding_term_exn bound constrs t) in
-  let map = SM.fold ~init:SM.empty ~f x in
-  let map = match tl with
-  | None -> map
-  | Some var ->
-    let tlrec = get_bound_exn bound constrs var in
-    let tail = if mtype = RecordMap then get_record_term_exn tlrec
-      else get_choice_term_exn tlrec in
-    SM.fold ~init:map ~f:(fun ~key ~data acc -> SM.add ~key ~data acc) tail in
-  if mtype = RecordMap then Term.Record (map, None)
-  else Term.Choice (map, None)
-
-and  bounding_term_exn bound constrs term =
+let rec bounding_term_exn bound constrs term =
   let open Term in
+  let all_variants map =
+    let f acc tm =
+      let l = Term.Map.to_alist tm in
+      if List.is_empty acc then List.map ~f:(fun x -> [x]) l
+      else
+        let res = ref [] in
+        List.iter
+          ~f:(fun x -> res := !res @ (List.map ~f:(fun xl -> xl @ [x]) acc)) l;
+        !res in
+    List.fold_left ~init:[] ~f map in
   match term with
   (* the case when [], {} [nil, nil], etc. are treated as nil *)
-  | t when Poly.(Term.is_nil t = Some true) -> Nil
-  | Nil | Int _ | Symbol _ -> term
+  | t when Poly.(Term.is_nil t = Some true) ->
+    Term.Map.singleton Term.Nil Logic.True
+  | Nil | Int _ | Symbol _ -> Term.Map.singleton term Logic.True
   | Var x -> get_bound_exn bound constrs x
-  | Tuple x -> Tuple (List.map ~f:(bounding_term_exn bound constrs) x)
+  | Tuple x ->
+    let map_list = List.map ~f:(bounding_term_exn bound constrs) x in
+    let r = all_variants map_list in
+    let result = List.map ~f:(fun lst ->
+      let g = List.fold_left ~init:Logic.True
+        ~f:(fun acc (_, g) ->
+          if Logic.(acc = True || acc = g) then g
+          else if Logic.(g = True) then acc
+          else Logic.And (g, acc)) lst in
+      let t = List.map ~f:(fun (t, _) -> t) lst in
+      (Term.Tuple t, g)) r in
+    Term.Map.of_alist_exn result
   | List (x, tail) ->
+    let map_list = List.map ~f:(bounding_term_exn bound constrs) x in
     let tl = match tail with
-    | None -> []
-    | Some var ->
-      get_list_term_exn (bounding_term_exn bound constrs (Var var)) in
-    List ((List.map ~f:(bounding_term_exn bound constrs) x) @ tl, None)
-  | Record (x, tl) -> bounding_map_exn bound constrs RecordMap x tl
-  | Choice (x, tl) -> bounding_map_exn bound constrs ChoiceMap x tl
+    | None -> Term.Map.empty 
+    | Some var -> bounding_term_exn bound constrs (Var var) in
+    let map_list_tl = Term.Map.fold ~init:[]
+      ~f:(fun ~key ~data acc ->
+        match key with
+        | List (l, None) ->
+          acc @ [List.map ~f:(bounding_term_exn bound constrs) l]
+        | _ -> acc
+      ) tl in
+    let combinations = List.map ~f:(fun x -> map_list @ x) map_list_tl in
+    let comb = List.fold_left ~init:[] ~f:(fun acc x -> acc @ all_variants x)
+      combinations in
+    List.fold_left ~init:Term.Map.empty
+      ~f:(fun acc l ->
+        let log, term = List.fold_left ~init:(Logic.True, [])
+          ~f:(fun (lacc, tacc) (t, l) -> (Logic.combine lacc l), tacc @ [t])
+          l in
+        Term.Map.add ~key:(Term.List (term, None)) ~data:log acc)
+      comb
+  | Switch map ->
+    Logic.Map.fold ~init:Term.Map.empty
+      ~f:(fun ~key ~data acc -> Term.Map.add ~key:data ~data:key acc) map
 
-let verify_collection_exn var col term f =
-  let open Constr in
-  let open Term in
-  match col, term with
-  | None, _
-  | _, Nil
-  | Some (RecordWoLabels _), Record _
-  | Some (ChoiceWoLabels _), Choice _
-  | Some ListCol, List _ -> f
-  | _ -> unsat_error ("constraint violation for variable $" ^ var)
-
-
-let add_logical_bound_exn depth bound constrs var term =
-  let b = if Poly.(bound = UpperB) then
-    (String.make (depth + 1) ' ') ^
-      "setting a logical term as a least upper bound"
-    else (String.make (depth + 1) ' ') ^
-      "setting a logical term as a greatest lower bound" in
-  String.Map.change constrs var (fun v ->
-    let open Constr in
-    match bound, v with
-    (* no constraints yet *)
-    | LowerB, None ->
-      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
-      Some {
-        bounds = (None, Term.Set.singleton term, Some Term.Nil, Term.Set.empty);
-        collection = None
-      }
-    | UpperB, None ->
-      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
-      Some {
-        bounds = (None, Term.Set.empty, Some term, Term.Set.empty);
-        collection = None }
-    | LowerB, Some ({ bounds = glb, llb, gub, lub; collection = col } as el) ->
-      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
-      Some {el with bounds = (glb, Term.Set.add llb term, gub, lub)}
-    | UpperB, Some ({ bounds = glb, llb, gub, lub; collection = col } as el) ->
-      Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
-      Some {el with bounds = (glb, llb, gub, Term.Set.add lub term)}
-  )
-
-let set_bound_exn depth bound constrs var term =
+let set_bound_exn depth bound constrs var term_map =
   let module SS = String.Set in
   let module SM = String.Map in
-  let term = Term.canonize term in
-  let term = if Term.is_nil_exn term then Term.Nil else term in
+  let simplify t =
+    let t = Term.canonize t in
+    if Term.is_nil_exn t then Term.Nil else t in
+  let term_map = Term.Map.fold ~init:Term.Map.empty
+    ~f:(fun ~key ~data acc -> Term.Map.add ~key:(simplify key) ~data acc)
+    term_map in
+
   (* add collection constraints *)
   let constrs =
     let open Term in
-    match term with
-    | List _ -> add_list_cstr_exn constrs var
-    | Record _ -> add_record_cstr_exn constrs var SS.empty
-    | Choice _ -> add_choice_cstr_exn constrs var SS.empty
-    | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs in
-  (* satisfy collection constraints *)
+    Term.Map.fold ~init:constrs ~f:(fun ~key ~data acc ->
+      match key with
+      | List _ -> add_list_constr constrs data var
+      | Record _ -> add_label_constr constrs var SM.empty data `Record
+      | Choice _ -> add_label_constr constrs var SM.empty data `Choice
+      | Switch _ (* will be processed recursively later *)
+      | Nil | Int _ | Symbol _ | Tuple _ | Var _ -> constrs) term_map in
   let open Constr in
-  let term = match SM.find constrs var with
-  | None -> term
-  | Some x -> match term, x.collection with
-    | Term.Record (x, None), Some (RecordWoLabels set) ->
-      if Poly.(bound = LowerB) then
-        Term.Record (SS.fold ~init:x ~f:SM.remove set, None)
-      else if not (SS.is_empty (SS.inter set (SS.of_list (SM.keys x)))) then
-        unsat_error (Printf.sprintf "constraint violation: variable $%s must \
-          be a record without labels {%s}" var
-          (String.concat ~sep:", " (SS.to_list set)))
-      else term
-    | Term.Choice (x, None), Some (ChoiceWoLabels set) ->
-      if Poly.(bound = UpperB) then
-        Term.Choice (SS.fold ~init:x ~f:SM.remove set, None)
-      else if not (SS.is_empty (SS.inter set (SS.of_list (SM.keys x)))) then
-        unsat_error (Printf.sprintf "constraint violation: variable $%s must \
-          be a choice without labels {%s}" var
-          (String.concat ~sep:", " (SS.to_list set)))
-      else term
-    | _ -> term in
-  let b = if Poly.(bound = UpperB) then
-    (String.make (depth + 1) ' ') ^ "setting least upper bound"
+  let b =
+    if Poly.(bound = `Upper) then
+      (String.make (depth + 1) ' ') ^ "setting least upper bound"
     else (String.make (depth + 1) ' ') ^ "setting greatest lower bound" in
-  String.Map.change constrs var (fun v ->
+  let resolve_bound term guard v =
     match bound, v, term with
     (* no constraints yet *)
-    | LowerB, None, t ->
+    | `Lower, None, t ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string Term.Nil);
       Some {
-        bounds = (Some t, Term.Set.empty, Some Term.Nil, Term.Set.empty);
-        collection = None
+        bounds =
+          (Term.Map.singleton t guard, Term.Map.singleton Term.Nil Logic.True);
+        typ = { record = None; choice = None; lst = None; };
       }
-    | UpperB, None, t ->
+    | `Upper, None, t ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string Term.Nil);
       Some {
-        bounds = (None, Term.Set.empty, Some t, Term.Set.empty);
-        collection = None }
-    (* the greatest lowest bound is not set yet *)
-    | LowerB, (Some ({ bounds = (None, s, ub, s'); collection = col } as el)),
-      _ ->
+        bounds =
+          (Term.Map.empty, Term.Map.singleton t guard);
+        typ = { record = None; choice = None; lst = None; };
+      }
+    | `Lower, Some ({bounds = (lb, ub); typ } as el), _ ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
-      verify_collection_exn var col term
-        (Some {el with bounds = (Some term, s, ub, s')})
-    (* the greatest lowest bound exists (try to shrink) *)
-    | LowerB,
-      ((Some { bounds = (Some oldt, s, ub, s'); collection = col}) as el),
-        newt ->
-      verify_collection_exn var col term
-        (if Poly.(Term.seniority_exn oldt newt = 1) then begin
-          Log.debugf "%s for variable $%s to %s" b var (Term.to_string newt);
-          Some { bounds = (Some newt, s, ub, s'); collection = col }
-         end else el
-        )
-    (* the least upper bound is not set yet *)
-    | UpperB, (Some ({ bounds = (lb, s, None, s'); collection = col } as el)),
-      _ ->
+      Some {el with bounds = (Term.Map.add ~key:term ~data:guard lb, ub)}
+    | `Upper, Some ({bounds = (lb, ub); typ } as el), _ ->
       Log.debugf "%s for variable $%s to %s" b var (Term.to_string term);
-      verify_collection_exn var col term
-        (Some {el with bounds = (lb, s, Some term, s')})
-    (* the least upper bound exists (try to shrink) *)
-    | UpperB,
-      ((Some { bounds = (lb, s, Some oldt, s'); collection = col}) as el),
-      newt ->
-      verify_collection_exn var col term
-        (if Poly.(Term.seniority_exn newt oldt = 1) then begin
-          Log.debugf "%s for variable $%s to %s" b var (Term.to_string newt);
-           Some { bounds = (lb, s, Some newt, s'); collection = col}
-         end else el
-        )
-  )
+      Some {el with bounds = (lb, Term.Map.add ~key:term ~data:guard ub)} in
+  Term.Map.fold ~init:constrs
+    ~f:(fun ~key ~data acc -> String.Map.change acc var (resolve_bound key
+    data))
+    term_map
 
-let map_to_nil_exn depth bound constrs h v =
-  let open Term in
-  let verify ~key ~data constrs = match data with
-  | Var t, Var t' ->
-    let constrs = set_bound_exn depth bound constrs t Nil in
-    set_bound_exn depth bound constrs t' Nil
-  | Var t, (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) 
-  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _), Var t ->
-    set_bound_exn depth bound constrs t Nil
-  | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
-    (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
-    constrs in
-  let constrs = match v with
-  | None -> constrs
-  | Some t -> set_bound_exn depth bound constrs t Nil in
-  String.Map.fold ~init:constrs ~f:verify h
-
-(* solve seniority relation for record and choice *)
-let rec solve_map_exn depth bound constrs mtype left right =
-  let module SM = String.Map in
-  let module SS = String.Set in
-  let (r, v), (r', v') =
-    if mtype = RecordMap then
-      unwrap_record_exn left, unwrap_record_exn right
-    else unwrap_choice_exn left, unwrap_choice_exn right in
-  (* resolve terms that are associated with same labels in both maps.
-     E.g. from { a, b, c, d | $x } and { b, c, e, f | $y }, terms with labels b
-     and c will be removed. *)
-  let set, set' = SS.of_list (SM.keys r), SS.of_list (SM.keys r') in
-  let solve constrs l =
-    let (g, t), (g', t') = SM.find_exn r l, SM.find_exn r' l in
-    if mtype = RecordMap then
-      add_bool_constr (Logic.Or [Logic.Not g'; g])
-    else
-      add_bool_constr (Logic.Or [Logic.Not g; g']);
-    solve_senior_exn (depth + 1) bound constrs t t' in
-  let constrs =
-    SS.fold ~init:constrs ~f:solve (SS.inter set set') in
-  let set, set' = SS.diff set set', SS.diff set' set in
-  (* In records (choices) all labels are specified in the right (left) term
-     must be also present in the left (right) term, otherwise this is an error.
-     E.g. {a, b, c, d} <= {a, b, c, e | $x } -- left term lacks e
-     (: a, b, c, e | $x :) <= (: a, b, c, d :) -- right term lacks e. *)
-  let _ = if (mtype = RecordMap && v = None && not (SS.is_empty set') ||
-    (mtype = ChoiceMap && v' = None && not (SS.is_empty set))) then
-    let ts1, ts2 = Term.to_string left, Term.to_string right in
-    let ts1, ts2 = if mtype = RecordMap then ts1, ts2 else ts2, ts1 in
-    unsat_error (Printf.sprintf "term %s contains labels that are not \
-      presentedin term %s" ts2 ts1) in
-  let from_set, from_map, from_var, to_map, to_var =
-    if bound = LowerB then set, r, v, r', v' else set', r', v', r, v in
-  let apply to_var =
-    let tail_map = SM.empty in
-    let set_tail_var tail_map l =
-      let (g, t) = SM.find_exn from_map l in
-      SM.add tail_map l (g, bounding_term_exn UpperB constrs t) in
-    let tail_map = SS.fold ~init:tail_map ~f:set_tail_var from_set in
-    (* The content of one variable is copied to another. *)
-    let apply' from_var =
-      let unwrap = if mtype = RecordMap then get_record_term_exn
-        else get_choice_term_exn in
-      let add ~key ~data tail_map =
-        if not (SM.mem to_map key) then
-          SM.add tail_map ~key ~data
-        else tail_map in
-      SM.fold ~init:tail_map ~f:add
-        (unwrap (bounding_term_exn UpperB constrs (Term.Var from_var))) in
-    let tail_map = Option.value_map ~default:tail_map ~f:apply' from_var in
-    if mtype = RecordMap then
-      set_bound_exn depth bound constrs to_var (Term.Record (tail_map, None))
-    else
-      set_bound_exn depth bound constrs  to_var (Term.Choice (tail_map, None)) in
-  Option.value_map ~default:constrs ~f:apply to_var
-
-and solve_senior_exn depth bound constrs left right =
+let solve_senior_exn depth bound context left right guard =
   let cstr = [left], [right] in
   Log.debugf "%sresolving %s for constraint %s" (String.make depth ' ')
-    (if bound = UpperB then "least upper bound" else "greatest lower bound")
+    (if bound = `Upper then "least upper bound" else "greatest lower bound")
     (Constr.to_string cstr);
   let error t1 t2 =
     unsat_error
       (Printf.sprintf "the seniority relation %s <= %s does not hold"
         (Term.to_string t1)
         (Term.to_string t2)) in
-  let (left, bool_cstr) = Equations.union left in
-  List.iter ~f:add_bool_constr bool_cstr;
-  let (right, bool_cstr) = Equations.union right in
-  List.iter ~f:add_bool_constr bool_cstr;
   try
     let open Term in
-    match left, right with
-    | Var t, Var t' ->
-      if Poly.(bound = UpperB) then
-        let bound_term = bounding_term_exn UpperB constrs right in
-        let constrs = set_bound_exn depth bound constrs t bound_term in
-        let open Constr in
-        match String.Map.find constrs t' with
-        | None -> constrs
-        | Some cstr -> match cstr.collection with
-          | None -> constrs
-          | Some (RecordWoLabels s) -> add_record_cstr_exn constrs t s
-          | Some (ChoiceWoLabels s) -> add_choice_cstr_exn constrs t s
-          | Some ListCol -> add_list_cstr_exn constrs t
-      else begin
-        let bound_term = bounding_term_exn UpperB constrs left in
-        let constrs = set_bound_exn depth bound constrs t' bound_term in
-        let open Constr in
-        match String.Map.find constrs t with
-        | None -> constrs
-        | Some cstr -> match cstr.collection with
-          | None -> constrs
-          | Some (RecordWoLabels s) -> add_record_cstr_exn constrs t' s
-          | Some (ChoiceWoLabels s) -> add_choice_cstr_exn constrs t' s
-          | Some ListCol -> add_list_cstr_exn constrs t'
-      end
-    | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
-      Var t ->
-      if Poly.(bound = UpperB) then
-        solve_senior_exn (depth + 1) bound constrs left
-          (bounding_term_exn UpperB constrs right)
-      else
-        set_bound_exn depth bound constrs t
-          (bounding_term_exn UpperB constrs left)
-    | Var t,
-      (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _) ->
-      if Poly.(bound = LowerB) then
-        solve_senior_exn (depth + 1) bound constrs
-          (bounding_term_exn UpperB constrs left)
-          right
-      else
-        set_bound_exn depth
-          bound constrs t (bounding_term_exn UpperB constrs right)
-    | Tuple t, Tuple t' when Int.(List.length t = List.length t') ->
-      List.fold2_exn ~init:constrs ~f:(solve_senior_exn (depth + 1) bound) t t'
-    | List (t, v), List (t', v') -> begin
-      (* validate the common head of the list and return remaining elements
-         (depending on lists lengths) *)
-      let rec validate_head constrs l1 l2 = match l1, l2 with
-      | [], _ -> constrs, [], l2
-      | _, [] -> constrs, l1, []
-      | hd :: tl, hd' :: tl' ->
-        let cstrs = solve_senior_exn (depth + 1) bound constrs hd hd' in
-        validate_head cstrs tl tl' in
-      let constrs, rem1, rem2 = validate_head constrs t t' in
-      (* an error if the tail of the right term is not nil *)
-      let _ = if Poly.(v = None && rem2 <> [] &&
-        Term.is_nil (List (rem2, None)) <> Some true) then error left right in
-      (* an error if the upper bound for tail variable in the right list makes
-         the right list longer then the left one. *)
-      let _ = if Poly.(rem1 = [] && rem2 = [] &&
-        Option.value_map ~default:false
-          ~f:(fun x -> Term.is_nil
-            (bounding_term_exn UpperB constrs (Var x)) <> Some true
-          ) v') then
-        error left right in
-      let rem1, rem2, what, where =
-        if Poly.(bound = LowerB) then rem1, rem2, v, v'
-        else rem2, rem1, v', v in
-      (* set variables in the tail of the list to Nil/[] *)
-      let constrs =
-        if Poly.(what = None) then
-          let set_ground cstrs var =
-            match var with
-            | Var v -> set_bound_exn depth bound cstrs v Nil
-            | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
-              cstrs in
-          List.fold_left ~init:constrs ~f:set_ground rem2
-        else constrs in
-      match where with
-      | None -> constrs
-      | Some var' ->
-        let tail_list = ref [] in
-        let _ = List.iter ~f:(fun el ->
-            tail_list := !tail_list @ [bounding_term_exn UpperB constrs el]
-          ) rem1 in
-        let _ = match what with
-        | None -> ()
-        | Some var -> tail_list := List.append !tail_list
-          (get_list_term_exn (bounding_term_exn UpperB constrs (Var var))) in
-        set_bound_exn depth bound constrs var' (List (!tail_list, None))
-      end
-    | List (l, v), Nil ->
-      if Poly.(bound = UpperB) then
-        let verify constrs = function
-        | Var t -> set_bound_exn depth bound constrs t Nil
-        | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
-          constrs in
-        let constrs = match v with
-          | None -> constrs
-          | Some x -> set_bound_exn depth bound constrs x Nil in
-        List.fold_left ~init:constrs ~f:verify l
-      else
-        let constrs = List.fold_left ~init:constrs
-          ~f:(fun c x -> solve_senior_exn (depth + 1) bound c x Nil) l in
-        Option.value_map ~default:constrs
-          ~f:(fun x -> solve_senior_exn (depth + 1) bound constrs (Var x) Nil)
-          v
-    | Nil, List (l, v) ->
-      if Poly.(bound = LowerB) then
-        let verify constrs = function
-        | Var t -> set_bound_exn depth bound constrs t Nil
-        | Nil -> constrs
-        | t when Poly.(Term.is_nil t = Some true) -> constrs
-        | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _ ->
-          unsat_error (Printf.sprintf "list %s is not nil"
-            (Term.to_string right)
-          ) in
-          List.fold_left ~init:constrs ~f:verify l
-      else
-        let constrs = List.fold_left ~init:constrs
-          ~f:(fun c x -> solve_senior_exn (depth + 1) bound c Nil x) l in
-        Option.value_map ~default:constrs
-          ~f:(fun x -> solve_senior_exn (depth + 1) bound constrs Nil (Var x))
-          v
-    | Record _, Record _ ->
-      solve_map_exn depth bound constrs RecordMap left right
-    | Choice _, Choice _ ->
-      solve_map_exn depth bound constrs ChoiceMap left right
-    | Nil, Choice (h, v) when Poly.(bound = LowerB) ->
-      constrs
-(*       map_to_nil_exn depth bound constrs h v *)
-    | Nil, Record (h, v) when Poly.(bound = LowerB) ->
-      constrs
-(*       map_to_nil_exn depth bound constrs h v *)
-    | Choice (h, v), Nil when Poly.(bound = UpperB) ->
-      constrs
-(*       map_to_nil_exn depth bound constrs h v *)
-    | Record (h, v), Nil when Poly.(bound = UpperB) ->
-      constrs
-(*       map_to_nil_exn depth bound constrs h v *)
-    | t, t' ->
-      if Int.(Term.seniority_exn t t' = -1) then error t t'
-      else constrs
-  with Term.Incomparable_Terms (t1, t2) -> error t1 t2
+    let constrs, logic = context in
+    let constrs' =
+      match left, right with
+      | Var t, Var t' ->
+        if Poly.(bound = `Upper) then
+          let bound_term = bounding_term_exn `Upper constrs right in
+          set_bound_exn depth `Upper constrs t bound_term guard
+        else
+          let bound_term = bounding_term_exn `Lower constrs left in
+          set_bound_exn depth `Lower constrs t' bound_term guard
+(*
+      | (Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _ | Choice _),
+        Var t ->
+        if Poly.(bound = `Upper) then
+          let bounds = bounding_term_exn `Upper constrs right in
+          let constrs = Term.Map.fold ~init:constrs
+            ~f:(fun ~key ~data acc -> solve
 
-let resolve_bound_constraints constrs topo =
-  let cstrs = ref constrs in
+*)
+    in constrs', logic
+
+
+let resolve_bound_constraints context topo =
+  let ctx = ref context in
   let apply bound (left, right) =
     List.iter ~f:(fun t -> List.iter
-        ~f:(fun t' -> cstrs := solve_senior_exn 0 bound !cstrs t t')
+        ~f:(fun t' -> ctx := solve_senior_exn 0 bound !ctx t t')
         right
       ) left in
   Log.debugf "setting least upper bounds for constraints";
-  List.iter ~f:(apply UpperB) (List.rev topo);
+  List.iter ~f:(apply `Upper) (List.rev topo);
   Log.debugf "setting greatest lower bounds for constraints";
-  List.iter ~f:(apply LowerB) topo;
-  !cstrs
+  List.iter ~f:(apply `Lower) topo;
+  !ctx
 
-let unify_exn g =
+
+
+let unify_exn (g, logic) =
   Log.debugf "creating a traversal order for constraints";
   let topo = Network.traversal_order g in
   Log.debugf "setting constraints on the type of constraint";
   let constrs = set_collection_constrs_exn topo in
-  Log.debugf "resolving bound constraints";
-  let constrs = resolve_bound_constraints constrs topo in
-  constrs, !boolean_constrs
+  constrs, logic

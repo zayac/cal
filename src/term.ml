@@ -10,6 +10,7 @@ module T = struct
     | Record of (Logic.t * t) String.Map.t * string option
     | Choice of (Logic.t * t) String.Map.t * string option
     | Var of string
+    | Switch of t Logic.Map.t
   with sexp, compare
 end
 include T
@@ -46,6 +47,12 @@ let rec to_string t =
   | Record (x, tail) -> print_dict x tail "{" "}"
   | Choice (x, tail) -> print_dict x tail "(:" ":)"
   | Var x -> "$" ^ x
+  | Switch x ->
+    let alist = Logic.Map.to_alist x in
+    let sl = List.map
+      ~f:(fun (l, t) -> Printf.sprintf "%s : %s" (Logic.to_string l)
+      (to_string t)) alist in
+    Printf.sprintf "<%s>" (String.concat ~sep:", " sl)
 
 let rec get_vars t =
   let module SS = String.Set in
@@ -60,10 +67,13 @@ let rec get_vars t =
     SS.union tl (L.fold_left ~init:SS.empty ~f:SS.union (L.map ~f:get_vars x))
   | Record (map, v)
   | Choice (map, v) ->
-    let f ~key:_ ~data:(g, t) acc =
-    SS.union acc (get_vars t) in
+    let f ~key:_ ~data:(_, t) acc = SS.union acc (get_vars t) in
     let tl = Option.value_map ~default:SS.empty ~f:SS.singleton v in
     SS.union tl (SM.fold ~init:SS.empty ~f:f map)
+  | Switch x ->
+    let f ~key:_ ~data acc = SS.union acc (get_vars data) in
+    Logic.Map.fold ~init:SS.empty ~f:f x
+
 
 let rec is_nil = function
   | Nil -> Some true
@@ -81,6 +91,14 @@ let rec is_nil = function
   | List (_, Some _)
   | Record (_, Some _) -> None
   | Int _ | Symbol _ | Tuple _ | Choice (_, _) -> Some false
+  | Switch x ->
+    let is_nil_flag = ref true in
+    let _ = Logic.Map.iter
+      ~f:(fun ~key ~data ->
+        if not Logic.(key = False) &&
+          not (Option.value ~default:false (is_nil data)) then
+          is_nil_flag := false) x in
+    if !is_nil_flag then Some true else None
 
 let rec is_nil_exn t =
   try
@@ -95,6 +113,12 @@ let rec is_nil_exn t =
     | List (_, Some _)
     | Record (_, Some _) -> raise (Non_Ground t)
     | Int _ | Symbol _ | Tuple _ | Choice (_, _)  -> false
+    | Switch x ->
+      let _ = Logic.Map.iter
+        ~f:(fun ~key ~data ->
+          if not Logic.(key = False) && not (is_nil_exn data) then
+            raise (Non_Ground t)) x in
+      true
   with Non_Ground _ -> raise (Non_Ground t)
 
 let canonize t =
@@ -119,6 +143,9 @@ let rec is_ground = function
   | Record (_, _)
   | List (_, _)
   | Var _ -> false
+  | Switch x -> Logic.Map.fold ~init:true
+    ~f:(fun ~key ~data acc ->
+      if Logic.(key = False) then acc else acc && is_ground data) x
 
 let rec seniority_exn t1 t2 =
   try
@@ -157,7 +184,7 @@ let rec seniority_exn t1 t2 =
      | Non_Ground _ ->
      raise (Incomparable_Terms (t1, t2))
 
-(* [seniority_mapes exn x x'] resolves the seniority relation for two 'map'
+(* [seniority_maps exn x x'] resolves the seniority relation for two 'map'
     terms, where [x] and [x'] has types [(logic * term) String.Map] each.
     Basically, this is a seniority relation resolution for record and choice
     terms. *)

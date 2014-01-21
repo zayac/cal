@@ -1,5 +1,4 @@
 open Core.Std
-open Log
 
 exception Topology_Error of string
 

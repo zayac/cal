@@ -1,3 +1,4 @@
 true: syntax(camlp4o)
 true: package(core,sexplib.syntax,comparelib.syntax,ocamlgraph)
 true: thread,debug,annot,use_menhir
+#true: warn_C, warn_D, warn_F, warn_K, warn_L, warn_M, warn_P, warn_R, warn_S, warn_U, warn_V, warn_X, warn_Y, warn_Z
