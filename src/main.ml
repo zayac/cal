@@ -1,7 +1,5 @@
 open Core.Std
-open Log
 open Network
-open Constr
 
 (* module for creating dot-files *)
 module Dot = Graph.Graphviz.Dot(struct
@@ -26,39 +24,10 @@ let create_dot_output g dot_output =
   Out_channel.with_file dot_output
     ~f:(fun oc -> Dot.output_graph oc g)
 
-let print_constraints map =
-  let f ~key ~data =
-    let gg, g, gu, u = data.bounds in
-    let print_bound (g, x) =
-      let l = String.Set.elements (String.Set.map ~f:Term.to_string x) in
-      let l = Option.value_map ~default:l
-        ~f:(fun x -> (Term.to_string x) :: l) g in
-      if Poly.(List.length l = 1) then String.concat l
-      else Printf.sprintf "{%s}" (String.concat ~sep:", " l) in
-    Printf.printf "%s <= $%s <= %s\n" (print_bound (gg, g)) key
-      (print_bound (gu, u));
-    match data.collection with
-    | None -> ()
-    | Some (RecordWoLabels x) ->
-      let l = if String.Set.is_empty x then ""
-      else
-        Printf.sprintf " without labels {%s}"
-        (String.concat ~sep:", " (String.Set.to_list x)) in
-      Printf.printf "$%s is a record%s\n" key l
-    | Some (ChoiceWoLabels x) ->
-      let l = if String.Set.is_empty x then ""
-      else
-        Printf.sprintf " without labels {%s}"
-        (String.concat ~sep:", " (String.Set.to_list x)) in
-      Printf.printf "$%s is a choice%s\n" key l
-    | Some ListCol -> Printf.printf "$%s is a list\n" key in
-  String.Map.iter ~f map
-
 let print_bool_constraints l =
   print_string "\nBoolean constraints:\n";
   let f x = print_endline (Logic.to_string x) in
   Logic.Set.iter ~f l
-
 
 let loop dot_output debug filename =
   Location.filename := filename;
@@ -75,11 +44,9 @@ let loop dot_output debug filename =
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
     Log.infof "unifying constraints represented as the graph";
-    let bounds, logic = Solver.unify_exn g in
-    let _ = print_constraints bounds in
+    let _ = Solver.unify_exn g in
     if not (Logic.Set.is_empty logic) then
       print_bool_constraints logic
-    else ()
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg
      | Network.Topology_Error msg
@@ -101,4 +68,3 @@ let command =
 
 let () =
   Command.run ~version:"0.2" ~build_info:"dev version" command
-

@@ -10,6 +10,7 @@ type t =
   | Record of (Logic.t * t) String.Map.t * string option
   | Choice of (Logic.t * t) String.Map.t * string option
   | Var of string
+  | Switch of t Logic.Map.t
 
 val compare_t : t -> t -> int
 val t_of_sexp : Sexplib.Sexp.t -> t

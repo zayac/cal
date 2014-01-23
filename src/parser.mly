@@ -1,6 +1,28 @@
 %{
 
-let bool_constrs = ref Logic.Set.empty 
+let bool_constrs = ref Logic.Set.empty
+
+let switch_of_alist_exn l =
+  match Logic.Map.of_alist l with
+  | `Duplicate_key expr ->
+    failwith ("two or more terms are associated with logical expression " ^
+      (Logic.to_string expr))
+  | `Ok map ->
+    if Logic.Map.mem map Logic.True then begin
+      Logic.Map.iter
+        ~f:(fun ~key ~data ->
+          if Logic.(key <> True) then
+            bool_constrs := Logic.Set.add !bool_constrs (Logic.Not key);
+        ) map;
+      Logic.Map.find_exn map Logic.True
+    end
+    else if Logic.Map.keys map = [Logic.True] then
+      Logic.Map.find_exn map Logic.True
+    else if Logic.Map.keys map = [Logic.False] then
+      Logic.Map.find_exn map Logic.False 
+    else
+      Term.Switch (Logic.Map.filter ~f:(fun ~key ~data -> key <> Logic.False)
+        map)
 
 let generate_pairs l =
   let rec apply acc el = function
@@ -26,8 +48,9 @@ let map_of_alist_exn l =
         (generate_pairs gacc) in
       let _ = bool_constrs := Logic.Set.union (Logic.Set.of_list andl)
         !bool_constrs in
-      (Logic.Or gacc, Term.Nil (*Term.Or (List.map2_exn ~f:(fun g t -> Term.And (g, t))
-        gacc vacc)) *) )
+      (Logic.Or gacc,
+        switch_of_alist_exn (List.map2_exn ~f:(fun g t -> g, t) gacc vacc)
+      ) 
     else
       g, v
   | (g, v) :: tl -> f (g :: gacc) (v :: vacc) tl in
@@ -38,7 +61,8 @@ let map_of_alist_exn l =
 %token <string> VAR
 %token <string> ID
 %token NIL NOT OR AND
-%token LBRACE RBRACE LPAREN RPAREN LBRACKET RBRACKET LSMILE RSMILE
+%token LBRACE RBRACE LPAREN RPAREN LBRACKET RBRACKET LANGULAR RANGULAR
+  LSMILE RSMILE
 %token SCOLON COLON COMMA BAR LEQ EQ EOF
 
 %start <Constr.t list * Logic.Set.t> parse
@@ -68,6 +92,10 @@ term:
     }
   | LBRACE RBRACE { Term.Nil }
   | LBRACKET RBRACKET { Term.Nil }
+  | LANGULAR separated_nonempty_list(COMMA, switch_entry) RANGULAR
+    {
+      switch_of_alist_exn $2
+    }
   | LSMILE separated_nonempty_list(COMMA, rec_entry) rec_list_tail? RSMILE
     {
       Term.Choice (map_of_alist_exn $2, $3)
@@ -78,6 +106,12 @@ term:
     }
   | LBRACKET separated_nonempty_list(COMMA, term) rec_list_tail? RBRACKET
     { Term.List ($2, $3) }
+
+switch_entry:
+  | logical_term COLON term
+    {
+      $1, $3
+    }
 
 rec_entry:
   | ID guard? COLON term
