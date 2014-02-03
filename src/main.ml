@@ -89,4 +89,12 @@ let command =
     (fun dot_output debug filename () -> loop dot_output debug filename)
 
 let () =
-  Command.run ~version:"0.2" ~build_info:"dev version" command
+  let v1, v2, v3, v4 = Z3.get_version () in
+  let z3_version = Printf.sprintf "%d.%d.%d.%d" v1 v2 v3 v4 in
+  let build_info = Printf.sprintf
+    "Version: %s\nOcaml version: %s\nZ3 version: %s\nBuild platform: %s\n\
+     Build date: %s"
+    (Version.version) (Version.ocaml_version) z3_version (Version.platform)
+      (Version.compile_time) in
+  Command.run ~version:(Version.version) ~build_info
+    command
