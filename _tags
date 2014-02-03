@@ -1,3 +1,9 @@
-true: syntax(camlp4o)
-true: package(core,sexplib.syntax,comparelib.syntax,ocamlgraph)
-true: thread,debug,annot,use_menhir
+<src/{logic,term,constr,network}.ml{,i}>: syntax(camlp4o), package(core,sexplib.syntax,comparelib.syntax), thread
+<src/{solver,z3Solver,main,equations}.ml{,i}>: package(core), thread
+<src/parser.ml{,y,i}>: package(core), thread
+<src/lexer.ml{,l,i}>: package(core), thread
+<src/{network,main}.ml{,i}>: package(ocamlgraph)
+<src/*.{byte,native}>: package(core,sexplib.syntax,comparelib.syntax,ocamlgraph), thread, use_z3
+true: use_menhir,annot
+<src/libz3stubs.a>: use_z3
+#true: debug,annot

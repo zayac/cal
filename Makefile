@@ -10,7 +10,7 @@ ifdef DEBUG_OCAMLBUILD
 	OCAMLBUILD_OPT += -classic-display
 endif
 
-all: byte native
+all: native
 
 byte: $(wildcard $(SRC)/*.ml $(SRC)/*.mli $(SRC)/lexer.mll $(SRC)/parser.mly)
 	$(OCAMLBUILD) -use-ocamlfind $(OCAMLBUILD_OPT) $(SRC)/main.byte

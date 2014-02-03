@@ -44,6 +44,11 @@ let merge_bounds bound old_terms new_terms =
   else Term.Map.fold ~init:Term.Map.empty ~f:fold new_terms
           
 let set_bound_exn depth bound constrs var terms =
+  let print_map tm =
+    let tl = Term.Map.to_alist tm in
+    let sl = List.map tl ~f:(fun (t, l) ->
+      Printf.sprintf "[%s]%s" (Logic.to_string l) (Term.to_string t)) in
+    String.concat ~sep:", " sl in 
   let simplify t =
     let t = Term.canonize t in
     if Term.is_nil_exn t then Term.Nil else t in
@@ -57,30 +62,165 @@ let set_bound_exn depth bound constrs var terms =
   String.Map.change constrs var (fun v ->
     match v with
     | None ->
+      Log.debugf "%s for variable $%s to %s" b var (print_map terms);
       if bound = `Upper then
         Some (Term.Map.empty, terms)
       else Some (terms, Term.Map.empty)
     | Some (l, u) ->
-      if bound = `Upper then Some (l, merge_bounds bound u terms)
-      else Some (merge_bounds bound l terms, u))
+      if bound = `Upper then
+        let merged = merge_bounds bound u terms in
+        Log.debugf "%s for variable $%s to %s" b var (print_map merged);
+        Some (l, merged)
+      else
+        let merged = merge_bounds bound l terms in
+        Log.debugf "%s for variable $%s to %s" b var (print_map merged);
+        Some (merged, u))
 
-let solve_senior_exn depth bound context left right = context
+let map_to_switch map =
+  let logic_map =
+    Term.Map.fold ~init:Logic.Map.empty
+      ~f:(fun ~key ~data acc ->
+        if Logic.Map.mem acc data then
+          failwith "logical key duplication"
+        else
+          Logic.Map.add acc ~key:data ~data:key)
+      map in
+  Term.Switch logic_map
+
+let switch_to_map term =
+  Logic.Map.fold ~init:Term.Map.empty
+    ~f:(fun ~key ~data acc ->
+      Term.Map.change acc data (function
+        | None -> Some key
+        | Some v -> Some (Logic.Or [v; key])))
+    term
+
+let bounds_of_switch bound constrs lm =
+  Logic.Map.fold ~init:Term.Map.empty
+    ~f:(fun ~key ~data acc ->
+      let b = bound_terms_exn bound constrs data in
+      let b = Term.Map.map ~f:(fun v -> Logic.And (v, key)) b in
+      merge_bounds bound acc b)
+  lm
+
 (*
+let rec solve_senior_exn depth bound context leftm rightm =
+  let error t1 t2 =
+    unsat_error
+      (Printf.sprintf "the seniority relation %s <= %s does not hold"
+        (Term.to_string t1)
+        (Term.to_string t2)) in
   try
     let open Term in
     let constrs, logic = context in
     match left, right with
     | Var t, (Nil | Int _ | Symbol _) ->
       if Poly.(bound = `Upper) then
-        set_bound_exn depth `Upper constrs (bound_terms_exn `Upper constrs left)
+        let term_map = bound_terms_exn `Upper constrs right in
+        let constrs = set_bound_exn depth `Upper constrs t term_map in
+        constrs, logic
+      else
+        let term_map = bound_terms_exn `Upper constrs left in
+        solve_senior_exn (depth + 1) `Lower context (map_to_switch term_map)
+          right
+    | (Nil | Int _ | Symbol _), Var t ->
+      if Poly.(bound = `Lower) then
+        let term_map = bound_terms_exn `Upper constrs left in
+        let constrs = set_bound_exn depth `Lower constrs t term_map in
+        constrs, logic
+      else
+        let term_map = bound_terms_exn `Upper constrs left in
+        solve_senior_exn (depth + 1) `Upper context left
+          (map_to_switch term_map)
+    | Var t, Switch lm ->
+      if Poly.(bound = `Upper) then
+        let bounds = bounds_of_switch `Upper constrs lm in
+        let constrs = set_bound_exn depth `Upper constrs t bounds in
+        constrs, logic
+      else
+        let bounds = bounds_of_switch `Upper constrs lm in
+        solve_senior_exn (depth + 1) bound context (map_to_switch bounds) right
+    | Switch lm, Var t ->
+      if Poly.(bound = `Lower) then
+        let bounds = bounds_of_switch `Upper constrs lm in
+        let constrs = set_bound_exn depth `Lower constrs t bounds in
+        constrs, logic
+      else
+        let bounds = bounds_of_switch `Upper constrs lm in
+        solve_senior_exn (depth + 1) bound context left (map_to_switch bounds)
+    | (Nil | Int _ | Symbol _), (Nil | Int _ | Symbol _) ->
+      if Int.(Term.seniority_exn left right = -1) then error left right
+      else context
+  with Term.Incomparable_Terms (t1, t2) -> error t1 t2
+
+*)
+(*
+
+let solve_senior_exn depth bound (constrs, logic) left_term left_logic
+  right_term right_logic =
+  match left_term, right_term
+  | 
+
+*)
+
+let extract_vars tm =
+  Term.Map.fold ~init:(String.Map.empty, Term.Map.empty)
+    ~f:(fun ~key ~data (vars, terms) ->
+      match key with
+      | Term.Var x -> String.Map.add vars ~key:x ~data, terms
+      | t -> vars, Term.Map.add terms ~key ~data) tm
+
+let solve_senior_multi_exn depth bound context leftm (rightm : Logic.t Term.Map.t)=
+  let constrs, logic = context in
+  if bound = `Upper then
+    let vars, terms = extract_vars leftm in
+    (* ground terms in the right part *)
+    let terms' = Term.Map.fold ~init:Term.Map.empty
+      ~f:(fun ~key ~data acc ->
+        let bounds = bound_terms_exn bound constrs key in
+        merge_bounds bound acc bounds) rightm in
+    (* set bounds for variables in the left part *)
+    let constrs =
+      String.Map.fold ~init:constrs
+        ~f:(fun ~key ~data acc ->
+          set_bound_exn (depth + 1) `Upper constrs key terms') vars in
+    let logic' = Term.logic_seniority_exn terms terms' in
+    constrs, logic'
+  else
+    let vars, terms = extract_vars rightm in
+    (* ground terms in the left part *)
+    let terms' = Term.Map.fold ~init:Term.Map.empty
+      ~f:(fun ~key ~data acc ->
+        let bounds = bound_terms_exn bound constrs key in
+        merge_bounds bound acc bounds) leftm in
+    (* set bounds for variables in the right part *)
+    let constrs =
+      String.Map.fold ~init:constrs
+        ~f:(fun ~key ~data acc ->
+          set_bound_exn (depth + 1) `Lower constrs key terms') vars in
+    let logic' = Term.logic_seniority_exn terms' terms in
+    constrs, logic'
+
+    
+(*
+  let apply ~key ~data context =
+    let term, logic = key, data in
+    Term.Map.fold ~init:context
+      ~f:(fun ~key ~data acc -> solve_senior_exn depth bound context term logic
+        key data)
+      rightm in
+  Term.Map.fold ~init:context ~f:apply leftm
 
 *)
 let resolve_bound_constraints topo =
   let ctx = ref (String.Map.empty, Logic.Set.empty) in
   let apply bound (left, right) =
-    List.iter ~f:(fun t -> List.iter
-        ~f:(fun t' -> ctx := solve_senior_exn 0 bound !ctx t t')
-        right
+    List.iter ~f:(fun t ->
+      let t_map = Term.Map.singleton t Logic.True in
+      List.iter ~f:(fun t' ->
+        let t_map' = Term.Map.singleton t' Logic.True in
+        ctx := solve_senior_multi_exn 0 bound !ctx t_map t_map'
+        ) right
       ) left in
   Log.debugf "setting least upper bounds for constraints";
   List.iter ~f:(apply `Upper) (List.rev topo);

@@ -24,6 +24,21 @@ let create_dot_output g dot_output =
   Out_channel.with_file dot_output
     ~f:(fun oc -> Dot.output_graph oc g)
 
+let print_constraints map =
+  let constr_to_string c =
+    let l = Term.Map.to_alist c in
+    let sl = List.map l
+      ~f:(fun (t, l) ->
+        if Logic.(l <> Logic.True) then
+          Printf.sprintf "[%s]%s" (Logic.to_string l) (Term.to_string t)
+        else Printf.sprintf "%s" (Term.to_string t)) in
+    String.concat ~sep:", " sl in
+  let print_bound ~key ~data =
+    let l, u = data in
+    Printf.printf "%s <= %s <= %s\n" (constr_to_string l) key
+      (constr_to_string u) in
+  String.Map.iter ~f:print_bound map
+
 let print_bool_constraints l =
   print_string "\nBoolean constraints:\n";
   let f x = print_endline (Logic.to_string x) in
@@ -44,9 +59,16 @@ let loop dot_output debug filename =
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
     Log.infof "unifying constraints represented as the graph";
-    let _ = Solver.unify_exn g in
+    let constrs, logic = Solver.unify_exn g in
+    print_constraints constrs;
     if not (Logic.Set.is_empty logic) then
-      print_bool_constraints logic
+      print_bool_constraints logic;
+    let ctx = Z3.mk_context [] in
+    match Z3Solver.assert_bool ctx (Z3Solver.ast_from_logic ctx logic) with
+    | None -> print_endline "unsat"
+    | Some m ->
+      print_endline "sat";
+      print_endline (Z3.model_to_string ctx m)
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg
      | Network.Topology_Error msg

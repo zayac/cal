@@ -210,3 +210,32 @@ and seniority_maps_exn x x' =
   else if less then -1
   else if more then 1
   else 0
+
+let logic_seniority_exn lm lm' =
+  let sat_disjunctive_terms = ref Logic.Set.empty in
+  let unsat_conjunctive_terms = ref Logic.Set.empty in
+  let add_unsat l l' =
+    unsat_conjunctive_terms :=
+      Logic.Set.add !unsat_conjunctive_terms (Logic.Not (Logic.combine l l')) in
+  let _ = Map.iter lm ~f:(fun ~key ~data ->
+    let term, logic = key, data in
+    Map.iter lm' ~f:(fun ~key ~data ->
+      let term', logic' = key, data in
+      try
+        if Int.(seniority_exn term term' > -1) then
+          sat_disjunctive_terms :=
+            Logic.Set.add !sat_disjunctive_terms (Logic.combine logic logic')
+        else
+          add_unsat logic logic'
+      with Incomparable_Terms _ ->
+        add_unsat logic logic')) in
+    if not (Logic.Set.is_empty !sat_disjunctive_terms) then
+      Logic.Set.add !unsat_conjunctive_terms
+        (Logic.Or (Logic.Set.to_list !sat_disjunctive_terms))
+    else if not (Logic.Set.is_empty !unsat_conjunctive_terms) then
+      !unsat_conjunctive_terms
+    else
+      Logic.Set.empty
+
+
+

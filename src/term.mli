@@ -54,6 +54,9 @@ val canonize : t -> t
     Throws an exception if one of the terms is not ground. *)
 val seniority_exn : t -> t -> int
 
+(** [logic_seniority t t'] *)
+val logic_seniority_exn : Logic.t Map.t -> Logic.t Map.t -> Logic.Set.t
+
 (** [get_vars t] returns a set of variable strings [s] from terms
     of the form [Var s] that are contained in [t] *)
 val get_vars : t -> String.Set.t
