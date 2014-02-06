@@ -21,3 +21,5 @@ val to_string : t -> string
 val is_ground : t -> bool
 
 val combine : t -> t -> t
+
+val pairwise_not_and : t list -> t list

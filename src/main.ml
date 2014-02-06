@@ -59,7 +59,8 @@ let loop dot_output debug filename =
     let g = constrs_to_graph_exn constrs in
     let _ = Option.value_map ~default:() ~f:(create_dot_output g) dot_output in
     Log.infof "unifying constraints represented as the graph";
-    let constrs, logic = Solver.unify_exn g in
+    let constrs, logic' = Solver.unify_exn g in
+    let logic = Logic.Set.union logic logic' in
     print_constraints constrs;
     if not (Logic.Set.is_empty logic) then
       print_bool_constraints logic;

@@ -60,3 +60,5 @@ val logic_seniority_exn : Logic.t Map.t -> Logic.t Map.t -> Logic.Set.t
 (** [get_vars t] returns a set of variable strings [s] from terms
     of the form [Var s] that are contained in [t] *)
 val get_vars : t -> String.Set.t
+
+val canonize_switch : t Logic.Map.t -> t Logic.Map.t * Logic.Set.t

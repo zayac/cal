@@ -15,12 +15,6 @@ let get_bound_exn bound constrs var =
   else if bound = `Upper then upper
   else lower
 
-let bound_terms_exn bound constrs term =
-  let open Term in
-  match term with
-  | Nil | Int _ | Symbol _ -> Term.Map.singleton term Logic.True
-  | Var x -> get_bound_exn bound constrs x
-
 let merge_bounds bound old_terms new_terms =
   let fold ~key ~data acc =
     let term, logic = key, data in
@@ -42,7 +36,19 @@ let merge_bounds bound old_terms new_terms =
     else acc in
   if Term.Map.is_empty old_terms then new_terms
   else Term.Map.fold ~init:Term.Map.empty ~f:fold new_terms
-          
+
+let rec bound_terms_exn bound constrs term =
+  let open Term in
+  match term with
+  | Nil | Int _ | Symbol _ -> Term.Map.singleton term Logic.True
+  | Switch x ->
+    Logic.Map.fold ~init:Term.Map.empty
+      ~f:(fun ~key ~data acc ->
+        let bounds = bound_terms_exn bound constrs data in
+        let bounds = Term.Map.map ~f:(fun x -> Logic.combine x key) bounds in
+        merge_bounds bound acc bounds) x
+  | Var x -> get_bound_exn bound constrs x
+
 let set_bound_exn depth bound constrs var terms =
   let print_map tm =
     let tl = Term.Map.to_alist tm in
@@ -86,6 +92,7 @@ let map_to_switch map =
           Logic.Map.add acc ~key:data ~data:key)
       map in
   Term.Switch logic_map
+(*
 
 let switch_to_map term =
   Logic.Map.fold ~init:Term.Map.empty
@@ -103,6 +110,7 @@ let bounds_of_switch bound constrs lm =
       merge_bounds bound acc b)
   lm
 
+*)
 (*
 let rec solve_senior_exn depth bound context leftm rightm =
   let error t1 t2 =
@@ -201,17 +209,6 @@ let solve_senior_multi_exn depth bound context leftm (rightm : Logic.t Term.Map.
     let logic' = Term.logic_seniority_exn terms' terms in
     constrs, logic'
 
-    
-(*
-  let apply ~key ~data context =
-    let term, logic = key, data in
-    Term.Map.fold ~init:context
-      ~f:(fun ~key ~data acc -> solve_senior_exn depth bound context term logic
-        key data)
-      rightm in
-  Term.Map.fold ~init:context ~f:apply leftm
-
-*)
 let resolve_bound_constraints topo =
   let ctx = ref (String.Map.empty, Logic.Set.empty) in
   let apply bound (left, right) =

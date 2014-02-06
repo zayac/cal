@@ -213,10 +213,6 @@ and seniority_maps_exn x x' =
 
 let logic_seniority_exn lm lm' =
   let sat_disjunctive_terms = ref Logic.Set.empty in
-  let unsat_conjunctive_terms = ref Logic.Set.empty in
-  let add_unsat l l' =
-    unsat_conjunctive_terms :=
-      Logic.Set.add !unsat_conjunctive_terms (Logic.Not (Logic.combine l l')) in
   let _ = Map.iter lm ~f:(fun ~key ~data ->
     let term, logic = key, data in
     Map.iter lm' ~f:(fun ~key ~data ->
@@ -225,17 +221,26 @@ let logic_seniority_exn lm lm' =
         if Int.(seniority_exn term term' > -1) then
           sat_disjunctive_terms :=
             Logic.Set.add !sat_disjunctive_terms (Logic.combine logic logic')
-        else
-          add_unsat logic logic'
       with Incomparable_Terms _ ->
-        add_unsat logic logic')) in
-    if not (Logic.Set.is_empty !sat_disjunctive_terms) then
-      Logic.Set.add !unsat_conjunctive_terms
-        (Logic.Or (Logic.Set.to_list !sat_disjunctive_terms))
-    else if not (Logic.Set.is_empty !unsat_conjunctive_terms) then
-      !unsat_conjunctive_terms
-    else
-      Logic.Set.empty
+        ())) in
+    !sat_disjunctive_terms
+
+let canonize_switch lmap =
+  (* remove all false expressions *)
+  let lmap = Logic.Map.fold ~init:Logic.Map.empty
+    ~f:(fun ~key ~data acc ->
+      let ctx = Z3.mk_context [] in
+      let single = Logic.Set.singleton key in
+      match Z3Solver.assert_bool ctx (Z3Solver.ast_from_logic ctx single) with
+      | None -> acc 
+      | Some _ -> Logic.Map.add ~key ~data acc) lmap in
+  if Logic.Map.mem lmap Logic.True then
+    let bool_constrs = Logic.Map.fold ~init:Logic.Set.empty
+      ~f:(fun ~key ~data acc ->
+        if Logic.(key = Logic.True) then acc
+        else Logic.Set.add acc (Logic.Not key)) lmap in
+    lmap, bool_constrs
+  else lmap, Logic.Set.empty
 
 
-
+  

@@ -39,3 +39,15 @@ let combine t t' =
   if t = True || t = t' then t'
   else if t' = True then t
   else And (t, t')
+
+let pairwise_not_and l =
+  let generate_pairs l =
+    let rec apply acc el = function
+    | [] -> acc
+    | hd :: tl -> apply ((el, hd) :: acc) el tl in
+    let rec iter_left acc = function
+    | [] -> acc
+    | hd :: tl -> iter_left (apply acc hd tl) tl in
+    iter_left [] l in
+  List.map ~f:(fun (x, y) -> Not (And (x, y))) (generate_pairs l)
+

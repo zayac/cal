@@ -26,7 +26,7 @@ let setup_info () =
   let write_version version time platform ocaml_version ch =
     Printf.fprintf ch
       "let version = %S\nlet compile_time = %S\nlet platform = %S\n\
-let ocaml_version=%S\n"
+let ocaml_version = %S\n"
       version time platform ocaml_version;
     close_out ch in
   open_out "src/version.ml"
