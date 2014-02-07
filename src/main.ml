@@ -65,7 +65,7 @@ let loop dot_output debug filename =
     if not (Logic.Set.is_empty logic) then
       print_bool_constraints logic;
     let ctx = Z3.mk_context [] in
-    match Z3Solver.assert_bool ctx (Z3Solver.ast_from_logic ctx logic) with
+    match Z3Solver.find_model ctx (Z3Solver.ast_from_logic ctx logic) with
     | None -> print_endline "unsat"
     | Some m ->
       print_endline "sat";

@@ -62,3 +62,5 @@ val logic_seniority_exn : Logic.t Map.t -> Logic.t Map.t -> Logic.Set.t
 val get_vars : t -> String.Set.t
 
 val canonize_switch : t Logic.Map.t -> t Logic.Map.t * Logic.Set.t
+
+val logic_map_to_term_map : t Logic.Map.t -> Logic.t Map.t

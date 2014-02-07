@@ -231,7 +231,7 @@ let canonize_switch lmap =
     ~f:(fun ~key ~data acc ->
       let ctx = Z3.mk_context [] in
       let single = Logic.Set.singleton key in
-      match Z3Solver.assert_bool ctx (Z3Solver.ast_from_logic ctx single) with
+      match Z3Solver.find_model ctx (Z3Solver.ast_from_logic ctx single) with
       | None -> acc 
       | Some _ -> Logic.Map.add ~key ~data acc) lmap in
   if Logic.Map.mem lmap Logic.True then
@@ -242,5 +242,8 @@ let canonize_switch lmap =
     lmap, bool_constrs
   else lmap, Logic.Set.empty
 
-
-  
+let logic_map_to_term_map lm =
+  Logic.Map.fold lm ~init:Map.empty ~f:(fun ~key ~data acc ->
+    Map.change acc data (function
+    | None -> Some key
+    | Some value -> Some (Logic.And (value, key))))
