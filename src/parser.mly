@@ -88,7 +88,12 @@ term:
   | INT { Term.Int $1 }
   | ID { Term.Symbol $1 }
   | VAR { Term.Var $1 }
-  | LPAREN term+ RPAREN { Term.Tuple $2 }
+  | LPAREN term+ RPAREN
+    {
+      let open Core.Std in
+      (* tuple of one element equals to the element itself *)
+      if List.length $2 = 1 then List.hd_exn $2 else Term.Tuple $2
+    }
   | LSMILE RSMILE
     {
       let open Core.Std in

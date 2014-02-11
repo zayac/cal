@@ -26,3 +26,6 @@ val to_string : t -> string
     the left and right parts of the constraint. *)
 val get_vars : t -> String.Set.t * String.Set.t
 
+val print_constraints : var_bounds String.Map.t -> unit
+
+val is_valid: Logic.t Term.Map.t -> Term.t option

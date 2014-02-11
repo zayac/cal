@@ -24,21 +24,6 @@ let create_dot_output g dot_output =
   Out_channel.with_file dot_output
     ~f:(fun oc -> Dot.output_graph oc g)
 
-let print_constraints map =
-  let constr_to_string c =
-    let l = Term.Map.to_alist c in
-    let sl = List.map l
-      ~f:(fun (t, l) ->
-        if Logic.(l <> Logic.True) then
-          Printf.sprintf "[%s]%s" (Logic.to_string l) (Term.to_string t)
-        else Printf.sprintf "%s" (Term.to_string t)) in
-    String.concat ~sep:", " sl in
-  let print_bound ~key ~data =
-    let l, u = data in
-    Printf.printf "%s <= %s <= %s\n" (constr_to_string l) key
-      (constr_to_string u) in
-  String.Map.iter ~f:print_bound map
-
 let print_bool_constraints l =
   print_string "\nBoolean constraints:\n";
   let f x = print_endline (Logic.to_string x) in
@@ -61,7 +46,7 @@ let loop dot_output debug filename =
     Log.infof "unifying constraints represented as the graph";
     let constrs, logic' = Solver.unify_exn g in
     let logic = Logic.Set.union logic logic' in
-    print_constraints constrs;
+    Constr.print_constraints constrs;
     if not (Logic.Set.is_empty logic) then
       print_bool_constraints logic;
     let ctx = Z3.mk_context [] in
