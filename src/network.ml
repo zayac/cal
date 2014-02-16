@@ -127,11 +127,18 @@ let to_acyclic g =
 let traversal_order g =
   let module T = Graph.Topological.Make_stable(G) in
   let topo = ref [] in
+  let traversed = ref Node.Set.empty in
+  let loops = ref [] in
   let add_edges v =
-      List.iter ~f:(fun (_, x, _) -> topo := !topo @ [x];
-        Log.debugf "constraint %s is scheduled" (Constr.to_string x) 
-      )
-      (G.pred_e g v) in
+    List.iter ~f:(fun (source, x, sink) ->
+      if Node.Set.mem !traversed source then begin
+        Log.debugf "constraint %s is scheduled" (Constr.to_string x);
+        topo := x :: !topo
+      end else
+        loops := x :: !loops) (G.pred_e g v);
+    traversed := Node.Set.add !traversed v in
   T.iter add_edges g;
-  !topo
-
+  List.iter ~f:(fun x ->
+    Log.debugf "constraint %s is marked as a loop constraint"
+      (Constr.to_string x)) !loops;
+  List.rev !topo, List.rev !loops

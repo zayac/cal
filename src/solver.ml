@@ -21,7 +21,7 @@ let get_bound_exn bound constrs var =
   else if bound = `Upper then upper
   else lower
 
-let merge_bounds bound old_terms new_terms =
+let merge_bounds depth bound old_terms new_terms =
   let map = ref Term.Map.empty in
   let iter ~key ~data =
     let term, logic = key, data in
@@ -44,8 +44,9 @@ let merge_bounds bound old_terms new_terms =
   else begin
     Term.Map.iter old_terms ~f:iter;
     let s = if bound = `Upper then "upper" else "lower" in
-    Log.debugf "merged %s bounds {%s} and {%s} into {%s}"
-      s (print_map old_terms) (print_map new_terms) (print_map !map);
+    Log.debugf "%s merged %s bounds {%s} and {%s} into {%s}"
+      (String.make depth ' ') s (print_map old_terms) (print_map new_terms)
+        (print_map !map);
     !map
   end
 
@@ -108,7 +109,7 @@ let set_bound_exn depth bound constrs var terms =
       else Some (terms, Term.Map.empty)
     | Some (l, u) ->
       if bound = `Upper then
-        let merged = merge_bounds bound u terms in
+        let merged = merge_bounds (depth + 1) bound u terms in
         if Term.Map.is_empty merged then
           raise (unsat_error
             (Printf.sprintf "upper bounds for variable $%s are inconsistent" 
@@ -117,7 +118,7 @@ let set_bound_exn depth bound constrs var terms =
           Log.debugf "%s for variable $%s to {%s}" b var (print_map merged);
           Some (l, merged)
       else
-        let merged = merge_bounds bound l terms in
+        let merged = merge_bounds (depth + 1) bound l terms in
         if Term.Map.is_empty merged then
           raise (unsat_error
             (Printf.sprintf "lower bounds for variable $%s are inconsistent" 
@@ -137,8 +138,8 @@ let rec solve_senior depth bound context left right =
         (Term.to_string t1)
         (Term.to_string t2)) in
   try
-    Log.debugf "solving constraint %s <= %s" (to_string term_left)
-      (to_string term_right);
+    Log.debugf "%ssolving constraint %s <= %s" (String.make depth ' ')
+      (to_string term_left) (to_string term_right);
     match term_left, term_right with
     | Var s, Var s' ->
       if Poly.(bound = `Upper) then
@@ -254,7 +255,7 @@ and solve_senior_multi_exn depth bound context leftm rightm =
       solve_senior depth bound acc (term_left, logic_left)
         (term_right, logic_right)))
 
-let resolve_bound_constraints topo =
+let resolve_bound_constraints topo loops =
   let ctx = ref (String.Map.empty, Logic.Set.empty) in
   let apply bound (left, right) =
     List.iter ~f:(fun t ->
@@ -264,13 +265,41 @@ let resolve_bound_constraints topo =
         ctx := solve_senior_multi_exn 0 bound !ctx t_map t_map'
         ) right
       ) left in
+  let topo' = List.rev topo in
   Log.infof "setting least upper bounds for constraints";
-  List.iter ~f:(apply `Upper) (List.rev topo);
+  List.iter ~f:(apply `Upper) topo';
   Log.infof "setting greatest lower bounds for constraints";
   List.iter ~f:(apply `Lower) topo;
+  List.iter ~f:(apply `Upper) (List.rev loops);
+  List.iter ~f:(apply `Lower) loops;
   !ctx
+
+let bounds_to_bool constrs =
+  let bools = ref Logic.Set.empty in
+  let add ~key ~data =
+    let lb_map, ub_map = data in
+    let clause = ref [] in
+    Term.Map.iter lb_map ~f:(fun ~key ~data ->
+      let left_term, left_logic = key, data in
+      Term.Map.iter ub_map ~f:(fun ~key ~data ->
+        let right_term, right_logic = key, data in
+        try
+          let comp = Term.seniority_exn left_term right_term in
+          if comp > -1 then
+            clause := (Logic.combine left_logic right_logic) :: !clause
+          else
+            bools := Logic.Set.add !bools
+              (Logic.Not (Logic.combine left_logic right_logic))
+         with Term.Incomparable_Terms _ ->
+          bools := Logic.Set.add !bools
+            (Logic.Not (Logic.combine left_logic right_logic))));
+    if not (List.is_empty !clause) then
+      bools := Logic.Set.add !bools (Logic.Or !clause) in
+  String.Map.iter constrs ~f:add;
+  !bools
 
 let unify_exn g =
   Log.debugf "creating a traversal order for constraints";
-  let topo = Network.traversal_order g in
-  resolve_bound_constraints topo
+  let topo, loops = Network.traversal_order g in
+  let constrs, logic = resolve_bound_constraints topo loops in
+  constrs, Logic.Set.union logic (bounds_to_bool constrs)

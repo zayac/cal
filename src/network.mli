@@ -52,4 +52,4 @@ val constrs_to_graph_exn : Constr.t list -> G.t
     there is no path from y to x. In the particular case of a DAG, this
     simplifies to: if there is an edge from x to y, then x is visited before
     y. *)
-val traversal_order : G.t -> Constr.t list
+val traversal_order : G.t -> Constr.t list * Constr.t list
