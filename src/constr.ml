@@ -43,3 +43,15 @@ let print_constraints map =
       (constr_to_string u) in
   String.Map.iter ~f:print_bound map
 
+let resolve_constraints constrs ctx model =
+  let f (left, right) =
+    let f' ~key ~data = function
+      | None ->
+        if Z3Solver.evaluate ctx model data then
+          Some (Term.Map.singleton key Logic.True)
+        else None
+      | x -> x in
+    let left' = Term.Map.fold ~init:None ~f:f' left in
+    let right' = Term.Map.fold ~init:None ~f:f' right in
+    (Option.value_exn left', Option.value_exn right') in
+  String.Map.map constrs ~f:f

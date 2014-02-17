@@ -54,7 +54,8 @@ let loop dot_output debug filename =
     | None -> print_endline "unsat"
     | Some m ->
       print_endline "sat";
-      print_endline (Z3.model_to_string ctx m)
+      print_endline (Z3.model_to_string ctx m);
+      Constr.print_constraints (Constr.resolve_constraints constrs ctx m)
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg
      | Network.Topology_Error msg

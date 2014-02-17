@@ -24,3 +24,13 @@ let ast_from_logic ctx l =
   let ast_list = List.map ~f:(transform ctx) logic_list in
   Z3.mk_and ctx (List.to_array ast_list)
 
+let evaluate ctx model l =
+  let ast = ast_from_logic ctx (Logic.Set.singleton l) in
+  let result = Z3.model_eval ctx model ast true in
+  match result with
+  | None -> failwith "something wrong"
+  | Some ast' ->
+    let b = Z3.get_bool_value ctx ast' in
+      if b = Z3.L_TRUE then true
+      else if b = Z3.L_FALSE then false
+      else failwith "something wrong"

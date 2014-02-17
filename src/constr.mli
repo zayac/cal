@@ -29,3 +29,6 @@ val get_vars : t -> String.Set.t * String.Set.t
 val print_constraints : var_bounds String.Map.t -> unit
 
 val is_valid: Logic.t Term.Map.t -> Term.t option
+
+val resolve_constraints : var_bounds String.Map.t -> Z3.context -> Z3.model ->
+    var_bounds String.Map.t
