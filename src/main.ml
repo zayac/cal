@@ -50,26 +50,27 @@ let loop dot_output debug verbose filename =
     Log.infof "unifying constraints represented as the graph";
     let constrs, logic' = Solver.unify_exn g in
     let logic = Logic.Set.union logic logic' in
-    if String.Map.is_empty constrs then
-      print_endline "No variable bound constraints"
-    else begin
-      print_endline "Bound constraints for variables:";
-      Constr.print_constraints constrs
-    end;
-    if not (Logic.Set.is_empty logic) then
+    if verbose then
+      if String.Map.is_empty constrs then
+        print_endline "No variable bound constraints"
+      else begin
+        print_endline "Bound constraints for variables:";
+        Constr.print_constraints constrs
+      end;
+    if verbose && not (Logic.Set.is_empty logic) then
       print_bool_constraints logic;
     let ctx = Z3.mk_context [] in
-    let models =
-      Z3Solver.find_all_models ctx (Z3Solver.ast_from_logic ctx logic) in
-    if List.is_empty models then
-      print_endline "No satisfiable model is found"
-    else begin
-      Printf.printf "%d models found\n" (List.length models);
-      List.iter models ~f:(fun m ->
-        print_endline "\nSatisfiable model:";
-        print_endline (Z3.model_to_string ctx m);
+    let model =
+      Z3Solver.find_model ctx (Z3Solver.ast_from_logic ctx logic) in
+    match model with
+    | None -> if verbose then print_endline "\nNo satisfiable model is found"
+    | Some m -> begin
+        if verbose then begin
+          print_endline "\nSatisfiable model:";
+          print_endline (Z3.model_to_string ctx m)
+        end;
         if not (String.Map.is_empty constrs) then
-          Constr.print_constraints (Constr.resolve_constraints constrs ctx m))
+          Constr.print_constraints (Constr.resolve_constraints constrs ctx m)
     end
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg

@@ -3,7 +3,6 @@ open Core.Std
 let find_model ctx ast =
   let slv = Z3.mk_solver ctx in
   Z3.solver_assert ctx slv ast;
-  print_endline "HELLO";
   match Z3.solver_check ctx slv with
   | Z3.L_FALSE
   | Z3.L_UNDEF -> None
