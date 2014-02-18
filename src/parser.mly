@@ -3,10 +3,6 @@ let bool_constrs = ref Logic.Set.empty
 
 let switch_of_alist_exn (startp, endp) l =
   let open Core.Std in
-  let print (l, t) =
-    Printf.sprintf "%s: %s" (Logic.to_string l) (Term.to_string t) in
-  Log.debugf "converting list [%s] to the switch term"
-    (String.concat ~sep:", " (List.map ~f:print l));
   match Logic.Map.of_alist l with
   | `Duplicate_key expr ->
     Errors.parse_error
@@ -19,17 +15,13 @@ let switch_of_alist_exn (startp, endp) l =
     let keys = Logic.Map.keys map in
     (* add freshly generated constraints from canonization function *)
     bool_constrs := Logic.Set.union !bool_constrs bool_constrs';
-    let f x = print_endline (Logic.to_string x) in
-    Logic.Set.iter ~f bool_constrs';
     (* add constraints asserting pairwise logical expressions exclusion *)
     let pairwise_exclusion = Logic.Set.of_list (Logic.pairwise_not_and keys) in
     bool_constrs := Logic.Set.union !bool_constrs pairwise_exclusion;
-    Logic.Set.iter ~f pairwise_exclusion;
     (* add constraints asserting that at least one logical expression must be
        satisfiable *)
     let singleton = Logic.Set.singleton (Logic.Or keys) in
     bool_constrs := Logic.Set.union !bool_constrs singleton;
-    Logic.Set.iter ~f singleton;
     if Logic.Map.is_empty map then
       Errors.parse_error
         "a switch term does not contain any satisfiable logic expression"

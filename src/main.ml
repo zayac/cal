@@ -25,11 +25,15 @@ let create_dot_output g dot_output =
     ~f:(fun oc -> Dot.output_graph oc g)
 
 let print_bool_constraints l =
-  print_string "\nBoolean constraints:\n";
-  let f x = print_endline (Logic.to_string x) in
-  Logic.Set.iter ~f l
+  if Logic.Set.is_empty l then
+    print_endline "\nNo boolean constraints"
+  else begin
+    print_endline "\nBoolean constraints:";
+    let f x = print_endline (Logic.to_string x) in
+    Logic.Set.iter ~f l
+  end
 
-let loop dot_output debug filename =
+let loop dot_output debug verbose filename =
   Location.filename := filename;
   if debug then begin
     Log.set_log_level Log.DEBUG;
@@ -46,16 +50,27 @@ let loop dot_output debug filename =
     Log.infof "unifying constraints represented as the graph";
     let constrs, logic' = Solver.unify_exn g in
     let logic = Logic.Set.union logic logic' in
-    Constr.print_constraints constrs;
+    if String.Map.is_empty constrs then
+      print_endline "No variable bound constraints"
+    else begin
+      print_endline "Bound constraints for variables:";
+      Constr.print_constraints constrs
+    end;
     if not (Logic.Set.is_empty logic) then
       print_bool_constraints logic;
     let ctx = Z3.mk_context [] in
-    match Z3Solver.find_model ctx (Z3Solver.ast_from_logic ctx logic) with
-    | None -> print_endline "unsat"
-    | Some m ->
-      print_endline "sat";
-      print_endline (Z3.model_to_string ctx m);
-      Constr.print_constraints (Constr.resolve_constraints constrs ctx m)
+    let models =
+      Z3Solver.find_all_models ctx (Z3Solver.ast_from_logic ctx logic) in
+    if List.is_empty models then
+      print_endline "No satisfiable model is found"
+    else begin
+      Printf.printf "%d models found\n" (List.length models);
+      List.iter models ~f:(fun m ->
+        print_endline "\nSatisfiable model:";
+        print_endline (Z3.model_to_string ctx m);
+        if not (String.Map.is_empty constrs) then
+          Constr.print_constraints (Constr.resolve_constraints constrs ctx m))
+    end
   with Lexer.Syntax_Error msg
      | Errors.Parsing_Error msg
      | Network.Topology_Error msg
@@ -70,10 +85,13 @@ let command =
       empty
       +> flag "-dot-output" (optional string) ~doc:"string output network \
         graph in dot format to a file provided as the argument"
-      +> flag "-verbose" no_arg ~doc:" print debug information"
+      +> flag "-debug" no_arg ~doc:" print debug information"
+      +> flag "-verbose" no_arg ~doc:" print preliminary computation \
+        results"
       +> anon ("filename" %:string)
     )
-    (fun dot_output debug filename () -> loop dot_output debug filename)
+    (fun dot_output debug verbose filename () ->
+      loop dot_output debug verbose filename)
 
 let () =
   let v1, v2, v3, v4 = Z3.get_version () in

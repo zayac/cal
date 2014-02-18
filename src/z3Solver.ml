@@ -3,13 +3,40 @@ open Core.Std
 let find_model ctx ast =
   let slv = Z3.mk_solver ctx in
   Z3.solver_assert ctx slv ast;
+  print_endline "HELLO";
   match Z3.solver_check ctx slv with
   | Z3.L_FALSE
   | Z3.L_UNDEF -> None
   | Z3.L_TRUE -> Some (Z3.solver_get_model ctx slv)
 
+ 
 let mk_var ctx name =
   Z3.mk_const ctx (Z3.mk_string_symbol ctx name) (Z3.mk_bool_sort ctx)
+
+let model_to_ast ctx model =
+  let assignments = List.map ~f:(String.split ~on:' ')
+    (String.split ~on:'\n' (Z3.model_to_string ctx model)) in
+  let values = List.map
+    ~f:(function
+      | [v; _; "false"] -> Z3.mk_not ctx (mk_var ctx v)
+      | [v; _; "true"] -> mk_var ctx v
+      | _ -> failwith "error") assignments in
+  Z3.mk_not ctx (Z3.mk_and ctx (Array.of_list values)) 
+
+let find_all_models ctx ast =
+  let models = ref [] in
+  let result = ref (find_model ctx ast) in
+  let ast' = ref ast in
+  while !result <> None do
+    (* add model to the list of solutions *)
+    let value = Option.value_exn !result in
+    models := value :: !models;
+    (* add a new constraint *)
+    ast' := Z3.mk_and ctx (Array.append [| !ast' |]
+      [| model_to_ast ctx value |]);
+    result := find_model ctx !ast';
+  done;
+  !models
 
 let ast_from_logic ctx l =
   let open Logic in
