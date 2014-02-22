@@ -39,7 +39,7 @@ let print_constraints map =
     String.concat ~sep:", " sl in
   let print_bound ~key ~data =
     let l, u = data in
-    Printf.printf "%s <= %s <= %s\n" (constr_to_string l) key
+    Printf.printf "%s <= $%s <= %s\n" (constr_to_string l) key
       (constr_to_string u) in
   String.Map.iter ~f:print_bound map
 

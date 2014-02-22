@@ -21,8 +21,8 @@ native: $(wildcard $(SRC)/*.ml $(SRC)/*.mli $(SRC)/lexer.mll $(SRC)/parser.mly)
 doc: $(wildcard $(SRC)/*.ml $(SRC)/*.mli $(SRC)/lexer.mll $(SRC)/parser.mly)
 	$(OCAMLBUILD) -use-ocamlfind $(OCAMLBUILD_OPT) $(SRC)/$(DOC)/index.html
 
-test: byte
-	./scripts/run_all_tests.pl main.byte my myerr
+test: native 
+	./scripts/run_all_tests.pl main.native my myerr
 	./scripts/compare_results.pl ref my referr myerr
 
 clean:

@@ -1,5 +1,3 @@
 nil <= $x <= nil
-$x is a list
 d <= $y <= nil
 [x, y] <= $z <= nil
-$z is a list

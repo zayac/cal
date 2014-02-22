@@ -47,7 +47,7 @@ let merge_bounds depth bound old_terms new_terms =
   else begin
     Term.Map.iter old_terms ~f:iter;
     let s = if bound = `Upper then "upper" else "lower" in
-    Log.debugf "%s merged %s bounds {%s} and {%s} into {%s}"
+    Log.debugf "%smerged %s bounds {%s} and {%s} into {%s}"
       (String.make depth ' ') s (print_map old_terms) (print_map new_terms)
         (print_map !map);
     !map
@@ -126,12 +126,13 @@ let set_bound_exn depth bound constrs var terms =
   terms in
   let b =
     if bound = `Upper then
-      (String.make (depth + 1) ' ') ^ "setting least upper bound"
-    else (String.make (depth + 1) ' ') ^ "setting greatest lower bound" in
+      (String.make depth ' ') ^ "setting least upper bound"
+    else (String.make depth ' ') ^ "setting greatest lower bound" in
     String.Map.change constrs var (fun v ->
     match v with
     | None ->
-      Log.debugf "%s for variable $%s to {%s}" b var (print_map terms);
+      Log.debugf "%s%s for variable $%s to {%s}" (String.make depth ' ') b var
+        (print_map terms);
       if bound = `Upper then
         Some (Term.Map.empty, terms)
       else Some (terms, Term.Map.empty)
@@ -143,7 +144,8 @@ let set_bound_exn depth bound constrs var terms =
             (Printf.sprintf "upper bounds for variable $%s are inconsistent" 
               var))
         else
-          Log.debugf "%s for variable $%s to {%s}" b var (print_map merged);
+          Log.debugf "%s%s for variable $%s to {%s}" (String.make depth ' ') b
+            var (print_map merged);
           Some (l, merged)
       else
         let merged = merge_bounds (depth + 1) bound l terms in
@@ -152,7 +154,8 @@ let set_bound_exn depth bound constrs var terms =
             (Printf.sprintf "lower bounds for variable $%s are inconsistent" 
               var))
         else
-          Log.debugf "%s for variable $%s to {%s}" b var (print_map merged);
+          Log.debugf "%s%s for variable $%s to {%s}" (String.make depth ' ') b
+            var (print_map merged);
           Some (merged, u))
 
 let poly_var_to_list bound context var logic_constr =
@@ -257,6 +260,24 @@ let rec solve_senior depth bound context left right =
         let constrs = set_bound_exn (depth + 1) bound constrs s bounds in
         constrs, logic
     (* list processing *)
+    | List (l, None), Var v ->
+      if Poly.(bound = `Upper) then
+        let bounds = bound_terms_exn bound constrs term_right logic_right in
+        Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
+          solve_senior (depth + 1) bound context left (key, data))
+      else
+        let bounds = bound_terms_exn bound constrs term_left logic_left in
+        let constrs = set_bound_exn (depth + 1) bound constrs v bounds in
+        constrs, logic
+    | Var v, List (l, None) ->
+      if Poly.(bound = `Lower) then
+        let bounds = bound_terms_exn bound constrs term_left logic_left in
+        Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
+          solve_senior (depth + 1) bound context (key, data) right)
+      else
+        let bounds = bound_terms_exn bound constrs term_right logic_right in
+        let constrs = set_bound_exn (depth + 1) bound constrs v bounds in
+        constrs, logic
     | List (t, var), Nil ->
       begin
         let context = List.fold ~init:context ~f:(fun acc el ->
@@ -288,7 +309,7 @@ let rec solve_senior depth bound context left right =
         let left, right = (hd, logic_left), (hd', logic_right) in
         let context = solve_senior (depth +1) bound context left right in
         validate_head context tl tl' in
-      let (constrs, logic), reml, remr = validate_head context t t' in
+      let context, reml, remr = validate_head context t t' in
       (* an error if the tail of the right term is not nil *)
       if Poly.(var = None && remr <> [] &&
           Term.is_nil (List (remr, None)) <> Some true) then
@@ -300,6 +321,7 @@ let rec solve_senior depth bound context left right =
         else raise (Term.Incomparable_Terms (term_left, term_right))
       | `Upper, [], None, Some v' -> context
       | `Upper, [], Some v, _ ->
+        let constrs, logic = context in
         let tail_bounds = List.map remr ~f:(fun x ->
           bound_terms_exn bound constrs x logic_right) in
         let tail_list = bound_combinations tail_bounds in
@@ -349,11 +371,12 @@ let rec solve_senior depth bound context left right =
         solve_senior (depth + 1) bound context nil (Var v', logic_right)
       (* lower bounds *)
       | `Lower, (_::_), _, Some v' ->
+        let constrs, logic = context in
         let tail_bounds = List.map reml ~f:(fun x ->
           bound_terms_exn bound constrs x logic_left) in
         let tail_list = bound_combinations tail_bounds in
         let context, var_list =
-          poly_var_to_list bound context var logic_left in
+          poly_var_to_list `Upper context var logic_left in
         let merged = ref [] in
         if List.is_empty var_list then
           merged := tail_list
@@ -361,15 +384,11 @@ let rec solve_senior depth bound context left right =
           List.iter tail_list ~f:(fun (lst, logic) ->
             List.iter var_list ~f:(fun (lst', logic') ->
               merged := (lst @ lst', Logic.combine logic logic') :: !merged));
-(*
-        List.iter !merged ~f:(fun (x, _) ->
-          print_endline (String.concat ~sep:", " (List.map x ~f:Term.to_string)));
-*)
         set_list_bound depth bound context v' !merged
       | `Lower, [], _, _ ->
         begin
         let context, var_list =
-          poly_var_to_list bound context var logic_left in
+          poly_var_to_list `Upper context var logic_left in
         let heads lst =
           List.fold lst ~init:(Term.Map.empty, [])
             ~f:(fun (hds, tls) (lst, logic) ->
@@ -391,84 +410,7 @@ let rec solve_senior depth bound context left right =
         | Some v -> set_list_bound depth bound context v tail_list
         | None -> context
         end
-
       end
-    (*
-        let tail_bound = match var' with
-        | Some x ->
-          begin
-            let b = bound_terms_exn bound constrs (Var x) logic_right with
-            Term
-          | List (x, None) ->
-            List.map x ~f:(fun x -> bound_terms_exn bound constrs x
-            logic_right)
-          | List (x, _) -> failwith "expected list which is ground term"
-          | _ -> []
-          end
-        | None -> [] in
-        let bound_list = List.map
-          ~f:(fun x -> bound_terms_exn bound constrs x logic_right) remr in
-        let bound_list = match tail_bound with
-          | List (x, None) -> bound_list ::
-              (List.map ~f:(fun x -> bound_terms_exn bound constrs x logic_right) x)
-          | List (x, _) -> failwith "expected list which is ground term"
-          | _ -> bound_list in
-        let set_to_var context to_list from_list = match to_list, from_list with
-          | [], _ -> context, [], l2
-          | _, [] -> context, l1, []
-          | hd :: tl, hd' :: tl' ->
-            let left, right = Term.Map.singleton hd logic_left, hd' in
-            let context = solve_senior (depth + 1) bound context left, right in
-            set_to_var context tl tl' in
-        let context, reml, remr = set_to_var (constrs, logic) reml bound_list in
-        context
-      else context
-*)
-
-
-(*
-    | List (t, var), List (t', var') ->
-      (* validate the common head of the list and return remaining elements
-         (depending on lists lengths) *)
-      let rec validate_head context l1 l2 = match l1, l2 with
-      | [], _ -> context, [], l2
-      | _, [] -> context, l1, []
-      | hd :: tl, hd' :: tl' ->
-        let left, right = (hd, logic_left), (hd', logic_right) in
-        let context = solve_senior (depth +1) bound context left right in
-        validate_head context tl tl' in
-      let context, rem1, rem2 = validate_head context t t' in
-      (* an error if the tail of the right term is not nil *)
-      if Poly.(var = None && rem2 <> [] &&
-          Term.is_nil (List (rem2, None)) <> Some true) then
-        raise (Term.Incomparable_Terms (term_left, term_right));
-      let rem1, rem2, what, where, what_logic, where_logic' =
-        if Poly.(bound = `Lower) then
-          rem1, rem2, var, var', logic_left, logic_right
-        else
-          rem2, rem1, var', var, logic_right, logic_left in
-      (* set variables in the tail of the list to Nil/[] *)
-      let constrs =
-        if Poly.(what = None) then
-          let set_ground cstrs var =
-            match var with
-            | Var v ->
-              set_bound_exn (depth + 1) bound cstrs v
-                (Term.Map.singleton Nil what_logic)
-            | Nil | Int _ | Symbol _ | Tuple _ | List _ | Record _
-            | Choice _ ->
-              cstrs in
-          List.fold_left ~init:constrs ~f:set_ground rem2
-        else constrs in
-      match where with
-      | None -> constrs, logic
-      | Some var' ->
-        let tail_list = ref [] in
-        let _ = List.iter ~f:(fun el ->
-          tail_list
-    
-      context
-*)
     | Switch lm, Var s ->
       let leftm = bound_terms_exn bound constrs term_left logic_left in
       if Poly.(bound = `Upper) then
