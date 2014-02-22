@@ -8,7 +8,7 @@ let time =
     tm.tm_hour tm.tm_min tm.tm_sec
 
 let version =
-  match run_and_read "git describe --long | tr -d '\\n'" with
+  match run_and_read "git describe --tags --long | tr -d '\\n'" with
   | "" -> "unknown"
   | version -> String.trim version
 
