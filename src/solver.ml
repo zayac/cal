@@ -172,7 +172,15 @@ let poly_var_to_list bound context var logic_constr =
         | Term.Nil -> context, acc
         | _ ->
           let constrs, logic = context in
-          (constrs, Logic.Set.add logic data), acc)
+          let b = Logic.Not (Logic.And (data, logic_constr)) in
+          (constrs, Logic.Set.add logic b), acc)
+
+let set_list_constraints context map =
+  Term.Map.fold map ~init:context ~f:(fun ~key ~data (constrs, logic) ->
+    match key with
+    | Term.List _
+    | Term.Nil -> constrs, logic
+    | _ -> constrs, Logic.Set.add logic (Logic.Not data))
 
 let set_list_bound depth bound (c, l) v lst =
   let map = List.fold lst ~init:Term.Map.empty ~f:(fun acc (lst, logic) ->
@@ -200,22 +208,22 @@ let rec solve_senior depth bound context left right =
         let constrs = set_bound_exn (depth + 1) `Upper constrs s rightm in
         constrs, logic
       else
-        let leftm = bound_terms_exn bound constrs term_left logic_left in
+        let leftm = bound_terms_exn `Upper constrs term_left logic_left in
         let constrs = set_bound_exn (depth + 1) `Lower constrs s' leftm in
         constrs, logic
     (* atomic terms *)
     | (Nil | Int _ | Symbol _), Var s ->
-      let leftm = bound_terms_exn bound constrs term_left logic_left in
+      let leftm = bound_terms_exn `Upper constrs term_left logic_left in
       if Poly.(bound = `Upper) then
         let rightm = bound_terms_exn bound constrs term_right logic_right in
         solve_senior_multi_exn (depth + 1) bound context leftm rightm
       else
-        let constrs = set_bound_exn (depth + 1) `Lower constrs s leftm in
+        let constrs = set_bound_exn (depth + 1) bound constrs s leftm in
         constrs, logic
     | Var s, (Nil | Int _ | Symbol _) ->
       let rightm = bound_terms_exn bound constrs term_right logic_right in
       if Poly.(bound = `Lower) then
-        let leftm = bound_terms_exn bound constrs term_left logic_left in
+        let leftm = bound_terms_exn `Upper constrs term_left logic_left in
         solve_senior_multi_exn (depth + 1) bound context leftm rightm
       else 
         let constrs = set_bound_exn (depth + 1) `Upper constrs s rightm in
@@ -245,7 +253,7 @@ let rec solve_senior depth bound context left right =
         let rightm = bound_terms_exn bound constrs term_right logic_right in
         Term.Map.fold rightm ~init:context ~f:solve
       else
-        let bounds = bound_terms_exn bound constrs term_left logic_left in
+        let bounds = bound_terms_exn `Upper constrs term_left logic_left in
         let constrs = set_bound_exn (depth + 1) bound constrs s bounds in
         constrs, logic
     | Var s, Tuple t ->
@@ -253,7 +261,7 @@ let rec solve_senior depth bound context left right =
         let solve ~key ~data acc =
           let left = key, data in
           solve_senior (depth + 1) bound context left right in
-        let leftm = bound_terms_exn bound constrs term_left logic_left in
+        let leftm = bound_terms_exn `Upper constrs term_left logic_left in
         Term.Map.fold leftm ~init:context ~f:solve
       else
         let bounds = bound_terms_exn bound constrs term_right logic_right in
@@ -266,12 +274,12 @@ let rec solve_senior depth bound context left right =
         Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
           solve_senior (depth + 1) bound context left (key, data))
       else
-        let bounds = bound_terms_exn bound constrs term_left logic_left in
+        let bounds = bound_terms_exn `Lower constrs term_left logic_left in
         let constrs = set_bound_exn (depth + 1) bound constrs v bounds in
         constrs, logic
     | Var v, List (l, None) ->
       if Poly.(bound = `Lower) then
-        let bounds = bound_terms_exn bound constrs term_left logic_left in
+        let bounds = bound_terms_exn `Upper constrs term_left logic_left in
         Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
           solve_senior (depth + 1) bound context (key, data) right)
       else
@@ -372,8 +380,15 @@ let rec solve_senior depth bound context left right =
       (* lower bounds *)
       | `Lower, (_::_), _, Some v' ->
         let constrs, logic = context in
+        (* set constraints on type of term for polymorphic variable *)
+        let context =
+          match var with
+          | None -> context
+          | Some v ->
+            let b = bound_terms_exn `Lower constrs (Var v) logic_left in
+            set_list_constraints context b in
         let tail_bounds = List.map reml ~f:(fun x ->
-          bound_terms_exn bound constrs x logic_left) in
+          bound_terms_exn `Upper constrs x logic_left) in
         let tail_list = bound_combinations tail_bounds in
         let context, var_list =
           poly_var_to_list `Upper context var logic_left in
@@ -387,6 +402,13 @@ let rec solve_senior depth bound context left right =
         set_list_bound depth bound context v' !merged
       | `Lower, [], _, _ ->
         begin
+        (* set constraints on type of term for polymorphic variable *)
+        let context =
+          match var with
+          | None -> context
+          | Some v ->
+            let b = bound_terms_exn `Lower constrs (Var v) logic_left in
+            set_list_constraints context b in
         let context, var_list =
           poly_var_to_list `Upper context var logic_left in
         let heads lst =
@@ -412,7 +434,7 @@ let rec solve_senior depth bound context left right =
         end
       end
     | Switch lm, Var s ->
-      let leftm = bound_terms_exn bound constrs term_left logic_left in
+      let leftm = bound_terms_exn `Upper constrs term_left logic_left in
       if Poly.(bound = `Upper) then
         let rightm = bound_terms_exn bound constrs term_right logic_right in
         solve_senior_multi_exn (depth + 1) bound context leftm rightm
@@ -422,7 +444,7 @@ let rec solve_senior depth bound context left right =
     | Var s, Switch lm ->
       let rightm = bound_terms_exn bound constrs term_right logic_right in
       if Poly.(bound = `Lower) then
-        let leftm = bound_terms_exn bound constrs term_left logic_left in
+        let leftm = bound_terms_exn `Upper constrs term_left logic_left in
         solve_senior_multi_exn (depth + 1) bound context leftm rightm
       else 
         let constrs = set_bound_exn (depth + 1) `Upper constrs s rightm in

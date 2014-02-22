@@ -1,2 +1,2 @@
-[3] <= $x <= nil
+nil <= $x <= nil
 nil <= $y <= nil
