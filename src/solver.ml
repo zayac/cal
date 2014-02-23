@@ -59,19 +59,49 @@ let combine_bounds bound old_terms new_terms =
     | None -> Some data
     | Some v -> Some (Logic.combine v data)))
 
-let rec bound_combinations = function
+let rec bound_combinations_list = function
   | [] -> []
   | hd :: [] ->
     Term.Map.fold hd ~init:[]
       ~f:(fun ~key ~data acc -> ([key], data) :: acc)
   | hd :: tl ->
-    let tail_bounds = bound_combinations tl in
+    let tail_bounds = bound_combinations_list tl in
     Term.Map.fold hd ~init:[]
       ~f:(fun ~key ~data acc ->
         let term, logic = key, data in
         List.fold tail_bounds ~init:acc
           ~f:(fun acc (lst, logic') ->
           (term :: lst, Logic.combine logic logic') :: acc))
+
+let rec bound_combinations_alist = function
+  | [] -> []
+  | (s, (l, map)) :: [] ->
+    Term.Map.fold map ~init:[]
+      ~f:(fun ~key ~data acc -> ([s, (l, key)], data) :: acc)
+  | (s, (l, map)) :: tl ->
+    let tail_bounds = bound_combinations_alist tl in
+    Term.Map.fold map ~init:[]
+      ~f:(fun ~key ~data acc ->
+        let term, logic = key, data in
+        List.fold tail_bounds ~init:acc
+          ~f:(fun acc (lst, logic') ->
+          ((s, (l, term)) :: lst, Logic.combine logic logic') :: acc))
+
+let rec merge_records left right logic =
+  let result = ref [String.Map.empty, logic] in
+  String.Map.iter2 left right ~f:(fun ~key ~data ->
+    let add l t =
+      List.map !result ~f:(fun (map, logic) ->
+        String.Map.add map ~key ~data:(l, t), Logic.And (l, logic)) in
+      match data with
+      | `Left (l, t)
+      | `Right (l, t) ->
+        result := add l t
+      | `Both ((l, t), (l', t')) ->
+        let res1 = add l t in
+        let res2 = add l' t' in
+        result := res1 @ res2);
+    !result
 
 let rec bound_terms_exn bound constrs term logic =
   let open Term in
@@ -87,12 +117,12 @@ let rec bound_terms_exn bound constrs term logic =
   | Tuple x ->
     let l = List.map x ~f:(fun x -> bound_terms_exn bound constrs x logic) in
     let term_list =
-      List.map (bound_combinations l) ~f:(fun (t, l) -> Tuple t, l) in
+      List.map (bound_combinations_list l) ~f:(fun (t, l) -> Tuple t, l) in
     let result = Term.Map.of_alist_exn term_list in
     result
   | List (x, s) ->
     let l = List.map x ~f:(fun x -> bound_terms_exn bound constrs x logic) in
-    let term_list = bound_combinations l in
+    let term_list = bound_combinations_list l in
     begin
       match s with
       | None ->
@@ -100,8 +130,7 @@ let rec bound_terms_exn bound constrs term logic =
           (List.map term_list ~f:(fun (t, l) -> List (t, None), l))
       | Some var ->
         let bounds = bound_terms_exn bound constrs (Var var) logic in
-        let lst = List.fold term_list ~init:[] ~f:(fun acc x ->
-          let head, logic' = x in
+        let lst = List.fold term_list ~init:[] ~f:(fun acc (head, logic') ->
           Term.Map.fold bounds ~init:acc ~f:(fun ~key ~data acc ->
             match key with
             | Term.List (l, None) ->
@@ -114,6 +143,36 @@ let rec bound_terms_exn bound constrs term logic =
             | _ -> acc)) in
         Term.Map.of_alist_exn
           (List.map  lst ~f:(fun (t, l) -> List (t, None), l))
+    end
+  | Record (map, s) ->
+    let b = String.Map.map map
+      ~f:(fun (l, t) -> l, bound_terms_exn bound constrs t logic) in
+    let term_map = bound_combinations_alist (String.Map.to_alist b) in
+    begin
+      match s with
+      | None ->
+        let combined = List.map term_map
+          ~f:(fun (lst, logic) ->
+          Record (String.Map.of_alist_exn lst, None), logic) in
+        Term.Map.of_alist_exn combined
+      | Some var ->
+        let bounds = bound_terms_exn bound constrs (Var var) logic in
+        let data = List.map term_map ~f:(fun (lst, logic) ->
+          String.Map.of_alist_exn lst, logic) in
+        let combined = List.fold data ~init:[] ~f:(fun acc (head, logic') ->
+          Term.Map.fold bounds ~init:acc ~f:(fun ~key ~data acc ->
+          match key with
+          | Term.Record (map, None) ->
+            let lst = merge_records head map logic' in
+            lst @ acc
+          | Term.Record (map, _) ->
+              raise (Unsatisfiability_Error
+                (Printf.sprintf "expected a ground list term, but %s found"
+                  (Term.to_string key)))
+          | _ -> acc)) in
+        let l = List.map combined
+          ~f:(fun (lst, logic) -> Record (lst, None), logic) in
+        Term.Map.of_alist_exn l
     end
   | Var x -> get_bound_exn bound constrs x
 
@@ -332,7 +391,7 @@ let rec solve_senior depth bound context left right =
         let constrs, logic = context in
         let tail_bounds = List.map remr ~f:(fun x ->
           bound_terms_exn bound constrs x logic_right) in
-        let tail_list = bound_combinations tail_bounds in
+        let tail_list = bound_combinations_list tail_bounds in
         let context, var_list =
           poly_var_to_list bound context var' logic_right in
         let merged = ref [] in
@@ -389,7 +448,7 @@ let rec solve_senior depth bound context left right =
             set_list_constraints context b in
         let tail_bounds = List.map reml ~f:(fun x ->
           bound_terms_exn `Upper constrs x logic_left) in
-        let tail_list = bound_combinations tail_bounds in
+        let tail_list = bound_combinations_list tail_bounds in
         let context, var_list =
           poly_var_to_list `Upper context var logic_left in
         let merged = ref [] in
@@ -433,6 +492,8 @@ let rec solve_senior depth bound context left right =
         | None -> context
         end
       end
+    (* record processing *)
+    (* switch processing *)
     | Switch lm, Var s ->
       let leftm = bound_terms_exn `Upper constrs term_left logic_left in
       if Poly.(bound = `Upper) then
