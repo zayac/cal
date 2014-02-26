@@ -26,11 +26,12 @@ let create_dot_output g dot_output =
 
 let print_bool_constraints l =
   if Logic.Set.is_empty l then
-    print_endline "\nNo boolean constraints"
+    print_endline "No boolean constraints\n"
   else begin
-    print_endline "\nBoolean constraints:";
+    print_endline "Boolean constraints:";
     let f x = print_endline (Logic.to_string x) in
-    Logic.Set.iter ~f l
+    Logic.Set.iter ~f l;
+    print_newline ()
   end
 
 let loop dot_output debug verbose filename =
@@ -55,7 +56,8 @@ let loop dot_output debug verbose filename =
         print_endline "No variable bound constraints"
       else begin
         print_endline "Bound constraints for variables:";
-        Constr.print_constraints constrs
+        Constr.print_constraints constrs;
+        print_newline ()
       end;
     if verbose && not (Logic.Set.is_empty logic) then
       print_bool_constraints logic;
@@ -63,10 +65,10 @@ let loop dot_output debug verbose filename =
     let model =
       Z3Solver.find_model ctx (Z3Solver.ast_from_logic ctx logic) in
     match model with
-    | None -> if verbose then print_endline "\nNo satisfiable model is found"
+    | None -> print_endline "No satisfiable model is found"
     | Some m -> begin
         if verbose then begin
-          print_endline "\nSatisfiable model:";
+          print_endline "Satisfiable model:";
           print_endline (Z3.model_to_string ctx m)
         end;
         if not (String.Map.is_empty constrs) then

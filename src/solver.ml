@@ -234,6 +234,19 @@ let poly_var_to_list bound context var logic_constr =
           let b = Logic.Not (Logic.And (data, logic_constr)) in
           (constrs, Logic.Set.add logic b), acc)
 
+(*
+let poly_var_to_map bound context initial_map var logic_constr =
+  match var with
+  | None -> context, [initial_map]
+  | Some v ->
+    let constrs, logic = context in
+    let bounds = bound_terms_exn bound constrs (Term.Var v) logic_constr in
+    Term.Map.fold bounds ~init:(context, [])
+      ~f:(fun ~key ~data (context, acc) ->
+        match key with
+        | Term.Record (map,
+
+*)
 let set_list_constraints context map =
   Term.Map.fold map ~init:context ~f:(fun ~key ~data (constrs, logic) ->
     match key with
@@ -327,7 +340,7 @@ let rec solve_senior depth bound context left right =
         let constrs = set_bound_exn (depth + 1) bound constrs s bounds in
         constrs, logic
     (* list processing *)
-    | List (l, None), Var v ->
+    | List _, Var v ->
       if Poly.(bound = `Upper) then
         let bounds = bound_terms_exn bound constrs term_right logic_right in
         Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
@@ -336,7 +349,7 @@ let rec solve_senior depth bound context left right =
         let bounds = bound_terms_exn `Lower constrs term_left logic_left in
         let constrs = set_bound_exn (depth + 1) bound constrs v bounds in
         constrs, logic
-    | Var v, List (l, None) ->
+    | Var v, List _ ->
       if Poly.(bound = `Lower) then
         let bounds = bound_terms_exn `Upper constrs term_left logic_left in
         Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
@@ -493,21 +506,176 @@ let rec solve_senior depth bound context left right =
         end
       end
     (* record processing *)
+    | Record _, Var s ->
+      if Poly.(bound = `Upper) then
+        let bounds = bound_terms_exn bound constrs term_right logic_right in
+        Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
+          solve_senior (depth + 1) bound context left (key, data))
+      else
+        let bounds = bound_terms_exn `Lower constrs term_left logic_left in
+        let constrs = set_bound_exn (depth + 1) bound constrs s bounds in
+        constrs, logic
+    | Var s, Record _ ->
+      if Poly.(bound = `Lower) then
+        let bounds = bound_terms_exn `Upper constrs term_left logic_left in
+        Term.Map.fold bounds ~init:context ~f:(fun ~key ~data acc ->
+          solve_senior (depth + 1) bound context (key, data) right)
+      else
+        let bounds = bound_terms_exn bound constrs term_right logic_right in
+        let constrs = set_bound_exn (depth + 1) bound constrs s bounds in
+        constrs, logic
+    | Record (map, var), Nil ->
+      begin
+        let context = String.Map.fold map ~init:context
+          ~f:(fun ~key ~data acc ->
+          let l, t = data in
+          solve_senior (depth + 1) bound acc (t, l) right) in
+        match var with
+        | None -> context
+        | Some v ->
+          solve_senior (depth + 1) bound context (Var v, logic_left) right
+      end
+    | Nil, Record (map, var) ->
+      begin
+        let context = String.Map.fold map ~init:context
+          ~f:(fun ~key ~data acc ->
+          let l, t = data in
+          solve_senior (depth + 1) bound acc left (t, l)) in
+        match var with
+        | None -> context
+        | Some v ->
+          solve_senior (depth + 1) bound context left (Var v, logic_left)
+      end
+    | Record (r, v), Record (r', v') ->
+      begin
+        if Poly.(bound = `Upper) then
+          let bounds = bound_terms_exn bound constrs term_right logic_right in
+          (* set bounds for all terms from the left to nil *)
+          let context = String.Map.fold r ~init:context
+            ~f:(fun ~key ~data acc ->
+              let (guard, term) = data in solve_senior (depth + 1) bound acc
+                (term, Logic.combine guard logic_left)
+                (Nil, logic_right)) in
+          let ctx = ref context in
+          let var_bounds = ref Term.Map.empty in
+          Term.Map.iter bounds ~f:(fun ~key ~data ->
+            let logic = Logic.combine data logic_right in
+            match key with
+            | Record (r', None) ->
+              begin
+              let var_rec = ref String.Map.empty in
+              let var_logic = ref logic in
+              String.Map.iter r' ~f:(fun ~key ~data ->
+                let label, (guard, term) = key, data in
+                match String.Map.find r key with
+                | None -> var_rec := String.Map.add !var_rec ~key:label
+                  ~data:(Logic.combine guard logic, term);
+                  var_logic := Logic.combine !var_logic (Logic.Not guard)
+                | Some (guard', term') ->
+                  try
+                    ctx := solve_senior (depth + 1) bound !ctx (term', guard')
+                      (term, guard);
+                    var_logic := Logic.combine !var_logic
+                      (Logic.Or [Logic.Not guard; guard'])
+                  with Unsatisfiability_Error _ ->
+                    var_logic := Logic.combine !var_logic
+                      (Logic.combine (Logic.Not guard) (Logic.Not guard')));
+                var_bounds := Term.Map.add !var_bounds ~key:(Record(!var_rec, None)) ~data:!var_logic
+              end 
+            | _ -> failwith "invalid term");
+            let constrs, logic = !ctx in
+            match v with
+            | None -> constrs, logic
+(*             raise (Incomparable_Terms (term_left, term_right)) *)
+            | Some var ->
+              let constrs = set_bound_exn (depth + 1) bound constrs var !var_bounds in
+              constrs, logic
+        else
+          let bounds = bound_terms_exn bound constrs term_left logic_left in
+          let ctx = ref context in
+          let var_bounds = ref Term.Map.empty in
+          Term.Map.iter bounds ~f:(fun ~key ~data ->
+            let logic = Logic.combine data logic_left in
+            match key with
+            | Record (r, None) ->
+              begin
+              let var_rec = ref String.Map.empty in
+              let var_logic = ref logic in
+              String.Map.iter r ~f:(fun ~key ~data ->
+                let label, (guard, term) = key, data in
+                match String.Map.find r' key with
+                | None -> var_rec := String.Map.add !var_rec ~key:label
+                  ~data:(Logic.combine guard logic, term);
+                  var_logic := Logic.combine !var_logic (Logic.Not guard)
+                | Some (guard', term') ->
+                  try
+                    ctx := solve_senior (depth +1) bound !ctx (term, guard)
+                      (term', guard');
+                    var_logic := Logic.combine !var_logic
+                      (Logic.Or [Logic.Not guard; guard'])
+                  with Unsatisfiability_Error _ ->
+                    var_logic := Logic.combine !var_logic
+                      (Logic.combine (Logic.Not guard) (Logic.Not guard')));
+                var_bounds := Term.Map.add !var_bounds ~key:(Record(!var_rec,None)) ~data:!var_logic
+              end
+            | _ -> failwith "invalid term");
+            let constrs, logic = !ctx in
+            match v' with
+            | None -> constrs, logic
+(*             raise (Incomparable_Terms (term_left, term_right)) *)
+            | Some var ->
+              let constrs = set_bound_exn (depth + 1) bound constrs var !var_bounds in
+              constrs, logic
+
+(*
+      let module SM = String.Map in
+      let module SS = String.Set in
+      (* resolve terms that are associated with the same labels in both maps.
+         E.g. from {a, b, c, d | $x} and {b, c, e, f | $y} terms with labels b
+         and c will be removed. *)
+      let set, set' = SS.of_list (SM.keys r), SS.of_list (SM.keys r') in
+      let solve context l =
+        let (l1, t1), (l2, t2) = SM.find_exn r l, SM.find_exn r' l in
+        solve_senior (depth + 1) bound context (t1, l1) (t2, l2) in
+      let context = SS.fold ~init:context ~f:solve (SS.inter set set') in
+      let diff, diff' = SS.diff set set', SS.diff set' set in
+      (* In records (choices) all labels are specified in the right (left) term
+         must be also present in the left (right) term, otherwise this is an error.
+         E.g. {a, b, c, d} <= {a, b, c, e | $x } -- left term lacks e *)
+      let _ = if Poly.(v = None && not (SS.is_empty diff')) then
+        let ts1, ts2 = Term.to_string term_left, Term.to_string term_right in
+        unsat_error (Printf.sprintf "term %s contains labels that are not \
+        present in term %s" ts2 ts1) in
+      if Poly.(bound = `Upper) then
+        if Poly.(v' = None) then context
+        else
+          let modified = ref r' in
+          SS.iter set' ~f:(fun x -> modified := SM.remove !modified x);
+          let record = Record (!modified, v') in
+          let bounds = bound_terms_exn bound constrs record logic_right in
+          let bounds = Term.Map.ch
+          context
+        else
+        context
+*)
+      end
     (* switch processing *)
     | Switch lm, Var s ->
-      let leftm = bound_terms_exn `Upper constrs term_left logic_left in
       if Poly.(bound = `Upper) then
         let rightm = bound_terms_exn bound constrs term_right logic_right in
+        let leftm = Term.logic_map_to_term_map lm in
         solve_senior_multi_exn (depth + 1) bound context leftm rightm
       else
+        let leftm = bound_terms_exn `Upper constrs term_left logic_left in
         let constrs = set_bound_exn (depth + 1) `Lower constrs s leftm in
         constrs, logic
     | Var s, Switch lm ->
-      let rightm = bound_terms_exn bound constrs term_right logic_right in
       if Poly.(bound = `Lower) then
         let leftm = bound_terms_exn `Upper constrs term_left logic_left in
+        let rightm = Term.logic_map_to_term_map lm in
         solve_senior_multi_exn (depth + 1) bound context leftm rightm
       else 
+        let rightm = bound_terms_exn bound constrs term_right logic_right in
         let constrs = set_bound_exn (depth + 1) `Upper constrs s rightm in
         constrs, logic
     | Switch lm, Switch lm' ->
