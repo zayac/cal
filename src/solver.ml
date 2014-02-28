@@ -170,6 +170,13 @@ let rec bound_terms_exn bound constrs term logic =
                 (Printf.sprintf "expected a ground list term, but %s found"
                   (Term.to_string key)))
           | _ -> acc)) in
+        (* if tail variable does not have bounding term that is a record,
+           throw error *)
+        let _ = if List.is_empty combined then
+          let b = if Poly.(bound = `Upper) then "upper" else "lower" in
+          raise (Unsatisfiability_Error
+            (Printf.sprintf "Missing record as a %s bound for variable $%s"
+            b var)) in
         let l = List.map combined
           ~f:(fun (lst, logic) -> Record (lst, None), logic) in
         Term.Map.of_alist_exn l
@@ -570,27 +577,74 @@ let rec solve_senior depth bound context left right =
                 match String.Map.find r key with
                 | None -> var_rec := String.Map.add !var_rec ~key:label
                   ~data:(Logic.combine guard logic, term);
-                  var_logic := Logic.combine !var_logic (Logic.Not guard)
+                  var_logic := Logic.combine !var_logic guard
                 | Some (guard', term') ->
                   try
-                    ctx := solve_senior (depth + 1) bound !ctx (term', guard')
-                      (term, guard);
-                    var_logic := Logic.combine !var_logic
-                      (Logic.Or [Logic.Not guard; guard'])
+                    let constrs, logic = solve_senior (depth + 1) bound !ctx (term', guard') (term, guard) in
+                    let logic = Logic.Set.add logic (Logic.Or [Logic.Not guard; guard']) in
+                    ctx := constrs, logic
                   with Unsatisfiability_Error _ ->
                     var_logic := Logic.combine !var_logic
                       (Logic.combine (Logic.Not guard) (Logic.Not guard')));
-                var_bounds := Term.Map.add !var_bounds ~key:(Record(!var_rec, None)) ~data:!var_logic
+                if not (String.Map.is_empty !var_rec) then
+                  var_bounds := Term.Map.add !var_bounds ~key:(Record(!var_rec, None)) ~data:!var_logic
               end 
             | _ -> failwith "invalid term");
             let constrs, logic = !ctx in
             match v with
-            | None -> constrs, logic
-(*             raise (Incomparable_Terms (term_left, term_right)) *)
+            | None ->
+              constrs, Term.Map.fold ~init:logic ~f:(fun ~key ~data acc ->
+                Logic.Set.add acc (Logic.Not data)) !var_bounds
             | Some var ->
               let constrs = set_bound_exn (depth + 1) bound constrs var !var_bounds in
               constrs, logic
         else
+          let bounds = bound_terms_exn bound constrs term_left logic_left in
+          (* set bounds for all terms from the left to nil *)
+(*
+          let context = String.Map.fold r' ~init:context
+            ~f:(fun ~key ~data acc ->
+              let (guard, term) = data in solve_senior (depth + 1) bound acc
+                (term, Logic.combine guard logic_left)
+                (Nil, logic_right)) in
+*)
+          let ctx = ref context in
+          let var_bounds = ref Term.Map.empty in
+          Term.Map.iter bounds ~f:(fun ~key ~data ->
+            let logic = Logic.combine data logic_left in
+            match key with
+            | Record (r, None) ->
+              begin
+              let var_rec = ref String.Map.empty in
+              let var_logic = ref logic in
+              String.Map.iter r ~f:(fun ~key ~data ->
+                let label, (guard, term) = key, data in
+                match String.Map.find r key with
+                | None -> var_rec := String.Map.add !var_rec ~key:label
+                  ~data:(Logic.combine guard logic, term);
+                  var_logic := Logic.combine !var_logic guard
+                | Some (guard', term') ->
+                  try
+                    let constrs, logic = solve_senior (depth + 1) bound !ctx (term, guard) (term', guard') in
+                    let logic = Logic.Set.add logic (Logic.Or [Logic.Not guard; guard']) in
+                    ctx := constrs, logic
+                  with Unsatisfiability_Error _ ->
+                    var_logic := Logic.combine !var_logic
+                      (Logic.combine (Logic.Not guard) (Logic.Not guard')));
+                if not (String.Map.is_empty !var_rec) then
+                  var_bounds := Term.Map.add !var_bounds ~key:(Record(!var_rec, None)) ~data:!var_logic
+              end 
+            | _ -> failwith "invalid term");
+            let constrs, logic = !ctx in
+            match v' with
+            | None ->
+              constrs, Term.Map.fold ~init:logic ~f:(fun ~key ~data acc ->
+                Logic.Set.add acc (Logic.Not data)) !var_bounds
+            | Some var ->
+              let constrs = set_bound_exn (depth + 1) bound constrs var !var_bounds in
+              constrs, logic
+
+(*
           let bounds = bound_terms_exn bound constrs term_left logic_left in
           let ctx = ref context in
           let var_bounds = ref Term.Map.empty in
@@ -622,41 +676,9 @@ let rec solve_senior depth bound context left right =
             let constrs, logic = !ctx in
             match v' with
             | None -> constrs, logic
-(*             raise (Incomparable_Terms (term_left, term_right)) *)
             | Some var ->
               let constrs = set_bound_exn (depth + 1) bound constrs var !var_bounds in
               constrs, logic
-
-(*
-      let module SM = String.Map in
-      let module SS = String.Set in
-      (* resolve terms that are associated with the same labels in both maps.
-         E.g. from {a, b, c, d | $x} and {b, c, e, f | $y} terms with labels b
-         and c will be removed. *)
-      let set, set' = SS.of_list (SM.keys r), SS.of_list (SM.keys r') in
-      let solve context l =
-        let (l1, t1), (l2, t2) = SM.find_exn r l, SM.find_exn r' l in
-        solve_senior (depth + 1) bound context (t1, l1) (t2, l2) in
-      let context = SS.fold ~init:context ~f:solve (SS.inter set set') in
-      let diff, diff' = SS.diff set set', SS.diff set' set in
-      (* In records (choices) all labels are specified in the right (left) term
-         must be also present in the left (right) term, otherwise this is an error.
-         E.g. {a, b, c, d} <= {a, b, c, e | $x } -- left term lacks e *)
-      let _ = if Poly.(v = None && not (SS.is_empty diff')) then
-        let ts1, ts2 = Term.to_string term_left, Term.to_string term_right in
-        unsat_error (Printf.sprintf "term %s contains labels that are not \
-        present in term %s" ts2 ts1) in
-      if Poly.(bound = `Upper) then
-        if Poly.(v' = None) then context
-        else
-          let modified = ref r' in
-          SS.iter set' ~f:(fun x -> modified := SM.remove !modified x);
-          let record = Record (!modified, v') in
-          let bounds = bound_terms_exn bound constrs record logic_right in
-          let bounds = Term.Map.ch
-          context
-        else
-        context
 *)
       end
     (* switch processing *)
@@ -728,6 +750,7 @@ let resolve_bound_constraints topo loops =
   List.iter ~f:(apply `Lower) topo;
   List.iter ~f:(apply `Upper) (List.rev loops);
   List.iter ~f:(apply `Lower) loops;
+  Log.infof "finished resolving bound constraints";
   !ctx
 
 let bounds_to_bool constrs =
