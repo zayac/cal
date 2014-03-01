@@ -31,7 +31,9 @@ let rec to_string t =
   let dict_el_to_string (l, (g, t)) =
     let guard = if Logic.(g = True) then "" else
       Printf.sprintf "(%s)" (Logic.to_string g) in
-    Printf.sprintf "%s%s: %s" l guard (to_string t) in
+    if Logic.(g <> False) then
+      Printf.sprintf "%s%s: %s" l guard (to_string t)
+    else "" in
   let print_dict x tail lsep rsep =
     let element_strs = L.map ~f:dict_el_to_string (SM.to_alist x) in
     S.concat [lsep;
@@ -193,17 +195,18 @@ and seniority_maps_exn x x' =
   let error_s = "wrong seniority relation" in
   let comp_res = ref [] in
   let validate map ~key ~data:(guard, term) =
-    let guard', term' = SM.find_exn map key in
-    (* TODO fix guard comparison *)
-    seniority_exn term' term in
-  let _ = if Int.(>) (SM.length x) (SM.length x') then
+    match SM.find map key with
+    | None -> raise (Incomparable_Terms (Record (x, None), Record (x', None)))
+    (* ignore guard comparison *)
+    | Some (_, term') -> seniority_exn term' term in
+  if Int.((SM.length x) > (SM.length x')) then
     SM.iter ~f:(fun ~key ~data ->
       comp_res := (validate x ~key ~data) :: !comp_res
     ) x'
   else
     SM.iter ~f:(fun ~key ~data ->
       comp_res := (validate x' ~key ~data) :: !comp_res
-    ) x in
+    ) x;
   let less = List.exists ~f:(Int.(=) (-1)) !comp_res in
   let more = List.exists ~f:(Int.(=) 1) !comp_res in
   if less && more then invalid_arg error_s
@@ -247,3 +250,13 @@ let logic_map_to_term_map lm =
     Map.change acc data (function
     | None -> Some key
     | Some value -> Some (Logic.And (value, key))))
+
+let unify ctx model term =
+  let transform map =
+    String.Map.map map ~f:(fun (logic, data) ->
+      (if Z3Solver.evaluate ctx model logic then Logic.True else Logic.False),
+      data) in
+  match term with
+  | Record (map, v) -> Record (transform map, v)
+  | Choice (map, v) -> Choice (transform map, v)
+  | x -> x

@@ -69,7 +69,7 @@ let loop dot_output debug verbose filename =
     | Some m -> begin
         if verbose then begin
           print_endline "Satisfiable model:";
-          print_endline (Z3.model_to_string ctx m)
+          print_endline (Z3.model_to_string ctx m);
         end;
         if not (String.Map.is_empty constrs) then
           Constr.print_constraints (Constr.resolve_constraints constrs ctx m)

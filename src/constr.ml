@@ -7,7 +7,7 @@ include T
 include Comparable.Make(T)
 
 (** A constraint on variable *)
-type var_bounds = Logic.t Term.Map.t * Logic.t Term.Map.t
+type var_bounds = Term.t Logic.Map.t * Term.t Logic.Map.t
 
 let hash = Hashtbl.hash
 
@@ -22,17 +22,11 @@ let get_vars (l, r) =
     ~f:(fun s x -> String.Set.union s (Term.get_vars x)) in
   f l, f r
 
-let is_valid c =
-  if Int.(Term.Map.length c = 1) && Poly.(Term.Map.data c = [Logic.True]) then
-    Some (List.hd_exn (Term.Map.keys c))
-  else
-    None
-
 let print_constraints map =
   let constr_to_string c =
-    let l = Term.Map.to_alist c in
+    let l = Logic.Map.to_alist c in
     let sl = List.map l
-      ~f:(fun (t, l) ->
+      ~f:(fun (l, t) ->
         if Logic.(l <> Logic.True) then
           Printf.sprintf "[%s]%s" (Logic.to_string l) (Term.to_string t)
         else Printf.sprintf "%s" (Term.to_string t)) in
@@ -47,11 +41,12 @@ let resolve_constraints constrs ctx model =
   let f (left, right) =
     let f' ~key ~data = function
       | None ->
-        if Z3Solver.evaluate ctx model data then
-          Some (Term.Map.singleton key Logic.True)
+        if Z3Solver.evaluate ctx model key then
+          Some (Logic.Map.singleton Logic.True
+            (Term.unify ctx model data))
         else None
       | x -> x in
-    let left' = Term.Map.fold ~init:None ~f:f' left in
-    let right' = Term.Map.fold ~init:None ~f:f' right in
+    let left' = Logic.Map.fold ~init:None ~f:f' left in
+    let right' = Logic.Map.fold ~init:None ~f:f' right in
     (Option.value_exn left', Option.value_exn right') in
   String.Map.map constrs ~f:f

@@ -60,3 +60,5 @@ let evaluate ctx model l =
       if b = Z3.L_TRUE then true
       else if b = Z3.L_FALSE then false
       else failwith "something wrong"
+
+ 

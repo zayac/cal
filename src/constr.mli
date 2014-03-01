@@ -4,7 +4,7 @@ open Core.Std
 type t = Term.t list * Term.t list
 
 (** A constraint on variable *)
-type var_bounds = Logic.t Term.Map.t * Logic.t Term.Map.t
+type var_bounds = Term.t Logic.Map.t * Term.t Logic.Map.t
 
 val compare_t : t -> t -> int
 val t_of_sexp : Sexplib.Sexp.t -> t
@@ -27,8 +27,6 @@ val to_string : t -> string
 val get_vars : t -> String.Set.t * String.Set.t
 
 val print_constraints : var_bounds String.Map.t -> unit
-
-val is_valid: Logic.t Term.Map.t -> Term.t option
 
 val resolve_constraints : var_bounds String.Map.t -> Z3.context -> Z3.model ->
     var_bounds String.Map.t

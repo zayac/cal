@@ -64,3 +64,5 @@ val get_vars : t -> String.Set.t
 val canonize_switch : t Logic.Map.t -> t Logic.Map.t * Logic.Set.t
 
 val logic_map_to_term_map : t Logic.Map.t -> Logic.t Map.t
+
+val unify : Z3.context -> Z3.model -> t -> t
