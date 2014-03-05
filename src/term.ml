@@ -179,8 +179,8 @@ let rec seniority_exn t1 t2 =
     | List (x, None), List (x', None) ->
       if Int.(>) (List.length x) (List.length x') then seniority_lists_exn x x'
         else -1 * (seniority_lists_exn x' x)
-    | Record (x, None), Record (x', None)
-    | Choice (x', None), Choice (x, None) -> seniority_maps_exn x x'
+    | Record (x, None), Record (x', None) -> seniority_maps_exn `Record x x'
+    | Choice (x, None), Choice (x', None) -> seniority_maps_exn `Choice x x'
     | _ -> raise (Incomparable_Terms (t1, t2))
   with Incomparable_Terms _
      | Non_Ground _ ->
@@ -190,14 +190,18 @@ let rec seniority_exn t1 t2 =
     terms, where [x] and [x'] has types [(logic * term) String.Map] each.
     Basically, this is a seniority relation resolution for record and choice
     terms. *)
-and seniority_maps_exn x x' =
+and seniority_maps_exn typ x x' =
   let module SM = String.Map in
   let error_s = "wrong seniority relation" in
   let comp_res = ref [] in
   let validate map ~key ~data:(guard, term) =
     match SM.find map key with
-    | None -> raise (Incomparable_Terms (Record (x, None), Record (x', None)))
-    (* ignore guard comparison *)
+    | None ->
+      if Poly.(typ = `Record) then
+        raise (Incomparable_Terms (Record (x, None), Record (x', None)))
+      else
+        raise (Incomparable_Terms (Choice (x, None), Choice (x', None)))
+    (* ignore guards *)
     | Some (_, term') -> seniority_exn term' term in
   if Int.((SM.length x) > (SM.length x')) then
     SM.iter ~f:(fun ~key ~data ->
@@ -209,9 +213,10 @@ and seniority_maps_exn x x' =
     ) x;
   let less = List.exists ~f:(Int.(=) (-1)) !comp_res in
   let more = List.exists ~f:(Int.(=) 1) !comp_res in
+  let multiplier = if Poly.(typ = `Record) then 1 else -1 in
   if less && more then invalid_arg error_s
-  else if less then -1
-  else if more then 1
+  else if less then multiplier * -1
+  else if more then multiplier * 1
   else 0
 
 let logic_seniority_exn lm lm' =

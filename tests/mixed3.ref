@@ -1,0 +1,5 @@
+nil <= $a <= nil
+(:a: nil, aa: 10, c: t:) <= $b <= (:a: nil, aa: 10, c: t:)
+(:a: nil, aa: 10:) <= $d <= (:a: nil, aa: 10:)
+[35] <= $l <= nil
+(:a: 10, c: t:) <= $x <= (:a: nil, aa: 10, c: t:)
